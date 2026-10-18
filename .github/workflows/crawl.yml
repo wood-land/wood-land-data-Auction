@@ -83,6 +83,7 @@ jobs:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           SHARE_EMAIL: ${{ secrets.SHARE_EMAIL }}
           GOOGLE_SA_KEY_JSON: ${{ secrets.GOOGLE_SA_KEY_JSON_ADMIN }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           COLLECT_MODE: ${{ steps.mode.outputs.mode }}
           APSL_AMT_END: ${{ github.event.inputs.apsl_amt_end || '500000000' }}
           # 예약(schedule)으로 시작됐는지, 사람이 버튼으로(workflow_dispatch) 시작

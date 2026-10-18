@@ -180,6 +180,108 @@ def _tid_from_url(url):
     return m.group(1) if m else ""
 
 
+# ===================== PNU (카카오 주소검색) =====================
+# 필지별 주소(14번 열)로 카카오 주소검색을 호출해 PNU(19자리)를 만들어 15번 열에 채운다.
+# 같은 주소는 캐시해 다시 호출하지 않는다. 키가 없거나 실패하면 빈 값으로 두고 크롤링은 계속한다.
+KAKAO_REST_API_KEY = os.environ.get("KAKAO_REST_API_KEY", "").strip()
+KAKAO_ADDR_URL = "https://dapi.kakao.com/v2/local/search/address.json"
+PNU_COL = 15
+PNU_ADDR_COL = 14
+PNU_BACKFILL_EXISTING = os.environ.get("PNU_BACKFILL_EXISTING", "1") == "1"
+_PNU_CACHE = {}
+_KAKAO_SESSION = None
+_kakao_key_warned = False
+
+
+def _clean_address_for_pnu(address):
+    addr = re.sub(r"\s+", " ", str(address or "")).strip()
+    addr = re.sub(r"외\s*\d+\s*필지", "", addr)        # "외 3필지" 표기 제거
+    addr = re.sub(r"\([^)]*\)\s*$", "", addr).strip()  # 끝의 괄호 설명 제거
+    return addr
+
+
+def lookup_pnu(address):
+    """주소 -> PNU(19자리: 법정동코드 10 + 산여부 1 + 본번 4 + 부번 4). 못 구하면 ""."""
+    global _KAKAO_SESSION, _kakao_key_warned
+    if not KAKAO_REST_API_KEY:
+        if not _kakao_key_warned:
+            print("[PNU] KAKAO_REST_API_KEY가 없어 PNU 조회를 건너뜁니다.")
+            _kakao_key_warned = True
+        return ""
+    addr = _clean_address_for_pnu(address)
+    if not addr:
+        return ""
+    if addr in _PNU_CACHE:
+        return _PNU_CACHE[addr]
+    if _KAKAO_SESSION is None:
+        _KAKAO_SESSION = requests.Session()
+
+    pnu = ""
+    for attempt in range(3):
+        try:
+            r = _KAKAO_SESSION.get(
+                KAKAO_ADDR_URL, headers={"Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"},
+                params={"query": addr}, timeout=10)
+            if r.status_code == 429:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            docs = r.json().get("documents") or []
+            a = (docs[0].get("address") if docs else None) or {}
+            b_code = a.get("b_code") or ""
+            main_no = str(a.get("main_address_no") or "").strip()
+            if len(b_code) >= 10 and main_no.isdigit() and int(main_no) > 0:
+                sub_no = str(a.get("sub_address_no") or "0").strip()
+                sub_no = sub_no if sub_no.isdigit() else "0"
+                mountain = "2" if a.get("mountain_yn") == "Y" else "1"
+                pnu = f"{b_code[:10]}{mountain}{int(main_no):04d}{int(sub_no):04d}"
+            break
+        except Exception as e:
+            if attempt == 2:
+                print(f"[PNU] 카카오 조회 실패: '{addr}' -> {type(e).__name__}: {e}")
+            else:
+                time.sleep(1.0 * (attempt + 1))
+    _PNU_CACHE[addr] = pnu
+    return pnu
+
+
+def prefetch_pnus(addresses, workers=8):
+    """주소 목록의 PNU를 병렬로 미리 조회해 캐시에 채운다(기존 행 채우기용)."""
+    from concurrent.futures import ThreadPoolExecutor
+    todo = []
+    seen = set()
+    for a in addresses:
+        c = _clean_address_for_pnu(a)
+        if c and c not in _PNU_CACHE and c not in seen:
+            seen.add(c)
+            todo.append(c)
+    if not todo or not KAKAO_REST_API_KEY:
+        return
+    print(f"[PNU] 기존 행 {len(todo):,}개 주소의 PNU를 미리 조회합니다...")
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(lookup_pnu, todo))
+    ok = sum(1 for c in todo if _PNU_CACHE.get(c))
+    print(f"[PNU] 미리 조회 완료: 성공 {ok:,} / {len(todo):,}")
+
+
+def fill_pnu(row_values):
+    """행의 PNU 칸(15번 열)이 비어 있으면 필지별 주소(14번 열)로 채운다(제자리 수정)."""
+    if len(row_values) <= PNU_COL or str(row_values[PNU_COL] or "").strip():
+        return
+    addr = row_values[PNU_ADDR_COL] if len(row_values) > PNU_ADDR_COL else ""
+    if not addr:
+        return
+    pnu = lookup_pnu(addr)
+    if pnu:
+        row_values[PNU_COL] = pnu
+        stat_inc("pnu_ok")
+    elif KAKAO_REST_API_KEY:
+        stat_inc("pnu_fail")
+        record_issue("A" if row_values[0] == TYPE_A_LABEL else "B", row_values[0],
+                     _tid_from_url(row_values[11]) if len(row_values) > 11 else "",
+                     row_values[1], "PNU실패", str(addr)[:60])
+
+
 def _row_dup_key(row_values):
     def _cell(i):
         return re.sub(r"\s+", " ", str(row_values[i] if i < len(row_values) and row_values[i] is not None else "")).strip()
@@ -195,8 +297,13 @@ def append_row_with_format(sheet, row_values, ac_value=None, dedupe=True):
         record_issue("A" if key[0] == TYPE_A_LABEL else "B", key[0], key[2], key[1], "중복차단", key[3][:60])
         return None
     _WRITTEN_ROW_KEYS.add(key)
+    try:
+        fill_pnu(row_values)
+    except Exception as e:
+        print(f"[PNU] 채우기 중 오류(무시하고 계속): {type(e).__name__}: {e}")
     sheet.append(row_values)
     r = sheet.max_row
+    sheet.cell(row=r, column=PNU_COL).number_format = '@'
     for col in CURRENCY_COLUMNS:
         cell = sheet.cell(row=r, column=col)
         if isinstance(cell.value, (int, float)):
@@ -2533,6 +2640,9 @@ def main():
         base, ext = os.path.splitext(save_path)
         save_path = f"{base}_A{ext}"
 
+    if PNU_BACKFILL_EXISTING:
+        prefetch_pnus(rv[PNU_ADDR_COL] for rv, _ac in existing_rows
+                      if len(rv) > PNU_COL and not str(rv[PNU_COL] or "").strip())
     for row_values, ac_value in existing_rows:
         append_row_with_format(sheet, row_values, ac_value, dedupe=False)
 
