@@ -102,7 +102,7 @@ COLLECT_MODE_ENV = os.environ.get("COLLECT_MODE", "both")
 # (2026-09-07, 로컬 v32 반영) 감정가격(APSL) 기준 대신 최저가격(MINB) 기준으로 필터링한다.
 # 워크플로우/Secrets 쪽 입력 이름은 하위 호환을 위해 그대로 APSL_AMT_END를 유지하되,
 # 내부적으로는 "최저가격 상한"을 의미하는 값으로 사용한다.
-MINB_AMT_END_ENV = os.environ.get("APSL_AMT_END", "500000000")
+MINB_AMT_END_ENV = os.environ.get("APSL_AMT_END", "300000000")
 # TRIGGER_TYPE: 워크플로우가 "schedule"(예약)로 시작됐는지, 그 외(수동 실행 등)로
 # 시작됐는지를 나타낸다. 워크플로우 파일에서 github.event_name 값을 그대로 넘겨준다.
 # 기본값을 "manual"로 둔 이유: 이 값을 못 받아오는 상황(예: 로컬에서 직접 실행,
@@ -166,7 +166,7 @@ AMOUNT_OPTIONS = [
     (40000000000, "400억"), (50000000000, "500억"), (60000000000, "600억"), (70000000000, "700억"),
     (80000000000, "800억"), (90000000000, "900억"), (100000000000, "1000억"),
 ]
-DEFAULT_APSL_AMT_END = 500000000
+DEFAULT_APSL_AMT_END = 300000000
 
 
 # (2026-10-04) 같은 물건이 2번씩 저장되는 문제 방지: 이번 실행에서 이미 시트에 기록한(또는 구글 시트에서
@@ -189,6 +189,7 @@ PNU_COL = 15
 PNU_ADDR_COL = 14
 PNU_BACKFILL_EXISTING = os.environ.get("PNU_BACKFILL_EXISTING", "1") == "1"
 _PNU_CACHE = {}
+_PNU_REASON = {}   # 실패한 주소 -> 실패 사유(원인 파악용 로그)
 _KAKAO_SESSION = None
 _kakao_key_warned = False
 
@@ -217,31 +218,51 @@ def lookup_pnu(address):
         _KAKAO_SESSION = requests.Session()
 
     pnu = ""
+    reason = "알수없음"
     for attempt in range(3):
         try:
             r = _KAKAO_SESSION.get(
                 KAKAO_ADDR_URL, headers={"Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"},
                 params={"query": addr}, timeout=10)
             if r.status_code == 429:
+                reason = "카카오429(호출한도)"
                 time.sleep(1.5 * (attempt + 1))
                 continue
+            if r.status_code in (401, 403):
+                reason = f"카카오인증오류{r.status_code}(키/권한 확인)"
+                print(f"[PNU] 카카오 인증 오류 HTTP {r.status_code}: {r.text[:150]}")
+                break
             r.raise_for_status()
             docs = r.json().get("documents") or []
-            a = (docs[0].get("address") if docs else None) or {}
+            if not docs:
+                reason = "검색결과없음(주소 오타/번지없음)"
+                break
+            a = docs[0].get("address")
+            if not a:
+                reason = "지번주소없음(도로명/지역만 검색됨)"
+                break
             b_code = a.get("b_code") or ""
             main_no = str(a.get("main_address_no") or "").strip()
-            if len(b_code) >= 10 and main_no.isdigit() and int(main_no) > 0:
+            if len(b_code) < 10:
+                reason = "법정동코드없음"
+            elif not main_no.isdigit() or int(main_no) <= 0:
+                reason = "본번없음(번지 미기재)"
+            else:
                 sub_no = str(a.get("sub_address_no") or "0").strip()
                 sub_no = sub_no if sub_no.isdigit() else "0"
                 mountain = "2" if a.get("mountain_yn") == "Y" else "1"
                 pnu = f"{b_code[:10]}{mountain}{int(main_no):04d}{int(sub_no):04d}"
+                reason = ""
             break
         except Exception as e:
+            reason = f"통신오류({type(e).__name__})"
             if attempt == 2:
                 print(f"[PNU] 카카오 조회 실패: '{addr}' -> {type(e).__name__}: {e}")
             else:
                 time.sleep(1.0 * (attempt + 1))
     _PNU_CACHE[addr] = pnu
+    if not pnu:
+        _PNU_REASON[addr] = reason
     return pnu
 
 
@@ -270,16 +291,22 @@ def fill_pnu(row_values):
         return
     addr = row_values[PNU_ADDR_COL] if len(row_values) > PNU_ADDR_COL else ""
     if not addr:
+        stat_inc("pnu_no_addr")
         return
     pnu = lookup_pnu(addr)
     if pnu:
         row_values[PNU_COL] = pnu
         stat_inc("pnu_ok")
     elif KAKAO_REST_API_KEY:
+        reason = _PNU_REASON.get(_clean_address_for_pnu(addr), "알수없음")
         stat_inc("pnu_fail")
+        stat_inc(f"pnu_fail_{reason.split('(')[0]}")
         record_issue("A" if row_values[0] == TYPE_A_LABEL else "B", row_values[0],
                      _tid_from_url(row_values[11]) if len(row_values) > 11 else "",
-                     row_values[1], "PNU실패", str(addr)[:60])
+                     row_values[1], "PNU실패", f"{reason} | {str(addr)[:60]}")
+    else:
+        stat_inc("pnu_skip_nokey")
+    stat_inc("pnu_try")
 
 
 def _row_dup_key(row_values):
@@ -734,6 +761,7 @@ RUN_LOG_EXT_HEADERS = [
     "A_총건수_시작", "A_총건수_끝", "A_처리tid", "A_미해결tid", "A_stale건너뜀", "A_재수집회차",
     "B_총건수_시작", "B_총건수_끝", "B_처리tid", "B_미해결tid", "B_stale건너뜀", "B_재수집회차",
     "페이지재시도", "중복차단행", "필지추출부족", "소요시간(분)", "마감도달", "문제기록건수",
+    "PNU성공", "PNU실패", "PNU실패사유",
 ]
 
 
@@ -865,6 +893,16 @@ def effective_expected(start_total, end_total, label=""):
     return min(start_total, end_total)
 
 
+def pnu_reason_summary():
+    """PNU 실패 사유별 건수를 '사유:건수, ...' 한 줄로 만든다(없으면 빈 문자열)."""
+    parts = [f"{k[len('pnu_fail_'):]}:{v}" for k, v in sorted(RUN_STATS.items()) if k.startswith("pnu_fail_")]
+    if RUN_STATS.get("pnu_no_addr"):
+        parts.append(f"주소없음:{RUN_STATS['pnu_no_addr']}")
+    if RUN_STATS.get("pnu_skip_nokey"):
+        parts.append(f"키없음:{RUN_STATS['pnu_skip_nokey']}")
+    return ", ".join(parts)
+
+
 def build_run_diag(seen_a, seen_b, a_start, a_end, b_start, b_end, a_recollect, b_recollect, deadline_hit):
     """_run_log 오른쪽 컬럼에 들어갈 진단 값을 만든다(키는 RUN_LOG_EXT_HEADERS와 같음)."""
     def _unresolved(side, seen):
@@ -893,6 +931,9 @@ def build_run_diag(seen_a, seen_b, a_start, a_end, b_start, b_end, a_recollect, 
         "소요시간(분)": round((time.monotonic() - _RUN_START_MONOTONIC) / 60, 1),
         "마감도달": "예" if deadline_hit else "",
         "문제기록건수": RUN_STATS.get("issue_total", 0),
+        "PNU성공": RUN_STATS.get("pnu_ok", 0),
+        "PNU실패": RUN_STATS.get("pnu_fail", 0) + RUN_STATS.get("pnu_no_addr", 0),
+        "PNU실패사유": pnu_reason_summary(),
     }
 
 
@@ -986,6 +1027,8 @@ def write_run_artifacts(diag, base, issues, save_dir):
             f"| 추출 실패 후 미해결 | {_n(diag['A_미해결tid'])} | {_n(diag['B_미해결tid'])} |",
             f"| stale로 건너뜀 | {_n(diag['A_stale건너뜀'])} | {_n(diag['B_stale건너뜀'])} |",
             f"| 재수집 회차 | {_n(diag['A_재수집회차'])} | {_n(diag['B_재수집회차'])} |",
+            "", f"- PNU 성공 {_n(diag['PNU성공'])}건 / 실패 {_n(diag['PNU실패'])}건"
+            + (f" ({diag['PNU실패사유']})" if diag.get("PNU실패사유") else ""),
             "", f"- 페이지 재시도 {_n(diag['페이지재시도'])}회 / 중복 차단 {_n(diag['중복차단행'])}행"
             f" / 필지추출부족 {_n(diag['필지추출부족'])}건 / 문제 기록 {_n(diag['문제기록건수'])}건"
             f" (상세는 `{ISSUES_TAB_NAME}` 탭)",
@@ -1473,9 +1516,9 @@ def prompt_apsl_amt_end():
     elif raw.isdigit() and int(raw) in valid_values:
         result = raw
     else:
-        print(f"[설정] APSL_AMT_END 값({raw!r})이 올바르지 않아 기본값(5억)으로 진행합니다.")
+        print(f"[설정] APSL_AMT_END 값({raw!r})이 올바르지 않아 기본값(3억)으로 진행합니다.")
         result = str(DEFAULT_APSL_AMT_END)
-    print(f"[설정] 감정가격 상한: {int(result):,}원 (환경변수 APSL_AMT_END)")
+    print(f"[설정] 최저가격 상한: {int(result):,}원 (환경변수 APSL_AMT_END)")
     return result
 
 

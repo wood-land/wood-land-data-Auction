@@ -19,9 +19,9 @@ on:
           - type_a
           - type_b
       apsl_amt_end:
-        description: "상한 값 (원 단위, 예: 500000000 = 5억)"
+        description: "상한 값 (원 단위, 예: 300000000 = 3억)"
         required: false
-        default: "500000000"
+        default: "300000000"
 
 jobs:
   crawl:
@@ -85,7 +85,7 @@ jobs:
           GOOGLE_SA_KEY_JSON: ${{ secrets.GOOGLE_SA_KEY_JSON_ADMIN }}
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           COLLECT_MODE: ${{ steps.mode.outputs.mode }}
-          APSL_AMT_END: ${{ github.event.inputs.apsl_amt_end || '500000000' }}
+          APSL_AMT_END: ${{ github.event.inputs.apsl_amt_end || '300000000' }}
           # 예약(schedule)으로 시작됐는지, 사람이 버튼으로(workflow_dispatch) 시작
           # 했는지를 그대로 넘겨준다 - crawler.py가 이 값으로 예약 전용 탭을 쓸지,
           # 수동 실행 전용(실행일자 기준) 탭을 쓸지 결정한다.
