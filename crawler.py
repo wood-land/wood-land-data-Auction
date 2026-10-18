@@ -1739,6 +1739,8 @@ def extract_row(row, tid, chk_no=None, tot_no=None):
             최저가, 감평가, 입찰일, 상세페이지, 신규여부, 지분여부,
             필지별주소, pnu, 토지이용계획, 소유자, 키워드,
         ]
+    except StaleElementReferenceException:
+        raise  # 호출부의 stale 처리/페이지 재시도가 동작하도록 삼키지 않는다
     except Exception as e:
         print(f"[tid={tid}] 데이터 추출 중 오류 발생: {e}")
         return None
@@ -1860,6 +1862,8 @@ def extract_row_pa(row, tid, chk_no=None, tot_no=None):
             최저가, 감평가, 입찰일, 상세페이지, 신규여부, 지분여부,
             필지별주소, pnu, 토지이용계획, 소유자, 키워드,
         ]
+    except StaleElementReferenceException:
+        raise  # 호출부의 stale 처리/페이지 재시도가 동작하도록 삼키지 않는다
     except Exception as e:
         print(f"[{TYPE_B_LABEL}][tid={tid}] 데이터 추출 중 오류 발생: {e}")
         return None
@@ -2750,8 +2754,12 @@ def main():
                 page_stale_retry = 0
 
                 if page_extracted_count == 0 and page_num > 1:
-                    print("이 페이지에서 추출된 데이터가 없어 종료합니다.")
-                    break
+                    if page_stale_count >= tot_no > 0:
+                        # 전부 stale로 실패(재시도 한도 초과)한 페이지는 끝이 아니므로 다음 페이지로 진행한다
+                        print(f"[경고] {page_num} 페이지 전체가 stale로 실패했지만 끝이 아니므로 다음 페이지로 넘어갑니다.")
+                    else:
+                        print("이 페이지에서 추출된 데이터가 없어 종료합니다.")
+                        break
 
                 next_page = page_num + 1
                 if not go_to_page(driver, next_page, prev_first_tid):
@@ -2932,8 +2940,13 @@ def main():
                             pa_page_stale_retry = 0
 
                             if page_extracted_count == 0 and pa_page_num > 1:
-                                print(f"[{TYPE_B_LABEL}/{prptdvsn_label}] 이 페이지에서 추출된 데이터가 없어 이 카테고리 수집을 종료합니다.")
-                                break
+                                if page_stale_count >= tot_no > 0:
+                                    # 전부 stale로 실패(재시도 한도 초과)한 페이지는 끝이 아니므로 다음 페이지로 진행한다
+                                    print(f"[경고][{TYPE_B_LABEL}/{prptdvsn_label}] {pa_page_num} 페이지 전체가 stale로 "
+                                          f"실패했지만 끝이 아니므로 다음 페이지로 넘어갑니다.")
+                                else:
+                                    print(f"[{TYPE_B_LABEL}/{prptdvsn_label}] 이 페이지에서 추출된 데이터가 없어 이 카테고리 수집을 종료합니다.")
+                                    break
 
                             next_page_pa = pa_page_num + 1
                             if not go_to_page(driver, next_page_pa, prev_first_tid_pa):
