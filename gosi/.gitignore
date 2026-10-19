@@ -1,0 +1,21 @@
+downloads/
+output/*
+!output/시군구_공보게시판_목록_new.xlsx
+__pycache__/
+*.pyc
+.venv/
+
+# BigQuery 인증/설정 (개인 프로젝트 정보 + 서비스 계정 키)
+config.json
+*-key.json
+bq-key.json
+
+# PNU/AI 변환 캐시 (git 밖, Actions 는 actions/cache 로 보존)
+data/.cache/
+
+# 수집 결과 DB 는 비공개 저장소(wood-land-data-db)를 이 폴더의 data/ 로 받아 쓴다. 이 저장소에는 올리지 않는다.
+/data/
+# PC 에서만 쓰는 키·시트 ID 는 저장소 밖(500_local)에 둔다. 혹시 이 폴더에 두더라도 올라가지 않게
+*.local.json
+sheet_id.txt
+.local_dir

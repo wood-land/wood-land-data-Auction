@@ -1,0 +1,9 @@
+requests
+certifi
+beautifulsoup4
+google-cloud-bigquery
+pdfplumber
+openpyxl
+pypdfium2
+pillow
+google-auth

@@ -1,4 +1,4 @@
-name: 주간 데이터 수집
+name: auction-weekly
 
 on:
   schedule:
@@ -31,6 +31,9 @@ on:
 jobs:
   crawl:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: auction
     timeout-minutes: 350  # GitHub 최대(360분)에 가깝게. crawler.py가 RUN_DEADLINE_MINUTES에 스스로 멈춰 병합까지 마치도록 여유를 둔다
     concurrency:
       # 이 워크플로우가 동시에 두 번 실행되는 것을 막는다(예약 실행끼리 GitHub 자체의

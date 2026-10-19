@@ -1,0 +1,6 @@
+# 결과(DB 포함)는 비공개 저장소 wood-land-data-db/news/ 에만 저장한다
+output/
+db/
+data/
+__pycache__/
+*.pyc

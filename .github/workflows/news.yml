@@ -1,0 +1,72 @@
+name: news-crawl
+
+on:
+  schedule:
+    - cron: "0 21 * * *"   # 매일 06:00 KST (UTC 21:00)
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "지역 (예: 충청, 강원). 비우면 전체"
+        required: false
+        default: ""
+      days:
+        description: "최근 N일 (매일 실행은 3일이면 충분, 처음 채울 때만 15~30)"
+        required: false
+        default: "3"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: news-crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    defaults:
+      run:
+        working-directory: news
+    env:
+      NEWS_SAVE_DIR: ${{ github.workspace }}/db/news
+      KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+      VWORLD_API_KEY: ${{ secrets.VWORLD_API_KEY }}
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout private DB repo -> db/
+        uses: actions/checkout@v4
+        with:
+          repository: wood-land/wood-land-data-db
+          token: ${{ secrets.DATA_DB_TOKEN }}
+          path: db
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: news/requirements.txt
+
+      - uses: browser-actions/setup-chrome@v1
+
+      - run: pip install -r requirements.txt
+
+      - name: Crawl + PNU
+        run: |
+          TARGET="${{ github.event.inputs.region }}"
+          DAYS="${{ github.event.inputs.days }}"
+          if [ -z "$TARGET" ]; then TARGET="--all"; fi
+          python run_crawl.py $TARGET --days "${DAYS:-3}" --headless --pnu
+
+      - name: Commit PNU DB to private repo (기사 본문 CSV 는 커밋하지 않음)
+        working-directory: db
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add news/news_articles_pnu.db
+          if git diff --cached --quiet; then echo "변경 없음"; exit 0; fi
+          git commit -m "news: PNU DB 갱신 $(date -u +%F)"
+          git pull --rebase origin main
+          git push

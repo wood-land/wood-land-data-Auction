@@ -1,0 +1,144 @@
+name: collect-gosigongo
+
+# 코드는 이 공개 저장소, 수집 결과 DB 는 여러 크롤러가 함께 쓰는 비공개 저장소(wood-land/wood-land-data-db)의 gosi/ 폴더에 둔다.
+# 비공개 저장소 쓰기 권한은 Secret GOSI_DB_TOKEN(그 저장소 하나에만 contents:write 를 준 fine-grained 토큰)으로 한다.
+
+on:
+  schedule:
+    - cron: "30 21 * * *"   # 매일 06:30 KST
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "gosigongo / gazette (비우면 둘 다)"
+        required: false
+        default: ""
+      regions:
+        description: "실행할 지역(쉼표 구분, 비우면 전체). 예: 강원,충북"
+        required: false
+        default: ""
+      reread:
+        description: "true 면 이미 처리한 글도 다시 읽는다(추출 코드를 고친 뒤)"
+        required: false
+        default: ""
+      days:
+        description: "수집 기간(일, 비우면 7). 오래된 글을 다시 읽을 때만 늘린다(예: 30)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read   # 이 저장소에는 쓰지 않는다(결과는 DB 저장소에만 올린다)
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      regions: ${{ steps.pick.outputs.regions }}
+    steps:
+      - id: pick
+        env:
+          INPUT_REGIONS: ${{ github.event.inputs.regions }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, datetime
+          ALL = ["강원","경기","경남","경북","광주","대구","대전","부산","세종","울산","인천","전남","전북","제주","충남","충북"]
+          # 전국은 기관이 많아 둘로 나누고 5일 주기로 돈다(수집 기간 7일이라 2일이 겹친다). offset 을 달리해 같은 날 겹치지 않게 한다.
+          WIDE = {"전국1": 0, "전국2": 2}
+          inp = [x for x in os.environ.get("INPUT_REGIONS", "").replace(" ", "").split(",") if x]
+          if inp:                       # 수동 실행 + 지역 지정: 그대로
+              pick = inp
+          elif os.environ["EVENT"] == "workflow_dispatch":   # 수동 실행 + 비움: 전체
+              pick = ALL + list(WIDE)
+          else:                         # 스케줄: 지자체는 3일에 한 번(하루에 약 1/3씩), 전국1/전국2 는 5일에 한 번
+              day = datetime.date.today().toordinal()
+              pick = [r for i, r in enumerate(ALL) if (day + i) % 3 == 0]
+              pick += [r for r, off in WIDE.items() if (day + off) % 5 == 0]
+          print("regions=" + json.dumps(pick, ensure_ascii=False))
+          PY
+
+  collect:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    defaults:
+      run:
+        working-directory: gosi
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.plan.outputs.regions) }}
+    concurrency:
+      group: collect-${{ matrix.region }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      # 비공개 DB 저장소를 data/ 로 받는다(이 크롤러의 DB 는 data/gosi/, .cache 는 그 저장소의 .gitignore 로 제외돼 있다). 캐시 복원보다 먼저 해야 한다.
+      - name: Checkout private DB repo -> gosi/data/
+        uses: actions/checkout@v4
+        with:
+          repository: wood-land/wood-land-data-db
+          token: ${{ secrets.GOSI_DB_TOKEN }}
+          path: gosi/data
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: gosi/requirements.txt
+
+      - name: Install tesseract (OCR, kor)
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-kor
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore PNU/AI cache (git 밖에 보관)
+        uses: actions/cache@v4
+        with:
+          path: gosi/data/gosi/.cache
+          key: gosi-cache-${{ matrix.region }}-${{ github.run_id }}
+          restore-keys: gosi-cache-${{ matrix.region }}-
+
+      - name: Check Kakao key
+        env:
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+        run: test -n "$KAKAO_REST_API_KEY" || { echo "::error::Secret KAKAO_REST_API_KEY 가 없습니다(PNU 변환 불가)"; exit 1; }
+
+      # --blocked skip: 이 러너(미국 IP)에서 막히는 게시판(core/blocked_sites.py)은 건너뛴다. 그곳은 국내 IP PC 의 '★PC수집_…_더블클릭_v….bat' 이 수집한다.
+      - name: Collect ${{ matrix.region }} -> SQLite
+        env:
+          PYTHONIOENCODING: utf-8
+          ONLY: ${{ github.event.inputs.only }}
+          REREAD: ${{ github.event.inputs.reread }}
+          DAYS: ${{ github.event.inputs.days }}
+          REGION: ${{ matrix.region }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GOOGLE_CREDENTIALS_EDITER: ${{ secrets.GOOGLE_CREDENTIALS_EDITER }}  # 수집 로그를 구글시트로 보낸다(없으면 건너뜀)
+          GOOGLE_SHEET_ID: ${{ secrets.GOSI_GOOGLE_SHEET_ID }}
+        run: |
+          ARGS="--region $REGION --blocked skip"
+          [ -n "$ONLY" ] && ARGS="$ARGS --only $ONLY"
+          [ "$REREAD" = "true" ] && ARGS="$ARGS --reread"
+          [ -n "$DAYS" ] && ARGS="$ARGS --gosi-days $DAYS --gazette-days $DAYS"
+          python run_scheduled.py $ARGS
+
+      - name: Commit SQLite (비공개 DB 저장소)
+        if: always()
+        working-directory: gosi/data
+        env:
+          REGION: ${{ matrix.region }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          [ -f "gosi/${REGION}.sqlite" ] || { echo "DB 없음"; exit 0; }
+          git add "gosi/${REGION}.sqlite"
+          if git diff --cached --quiet; then echo "변경 없음"; exit 0; fi
+          git commit -m "chore(gosi): ${REGION} 고시공고/공보 수집 결과 갱신 ($(date -u +%F))"
+          echo "DB 저장소 크기: $(git count-objects -vH | grep size-pack) / DB 파일: $(du -sh "gosi/${REGION}.sqlite" | cut -f1)"  # 1GB 가까워지는지 지켜보는 용도
+          # 지역마다 다른 파일이라 충돌은 없지만, 동시에 푸시하면 거절될 수 있어 재시도한다
+          for i in 1 2 3 4 5 6; do
+            git pull --rebase origin "$(git rev-parse --abbrev-ref HEAD)" && git push && exit 0
+            sleep $((RANDOM % 10 + 5))
+          done
+          echo "::error::push 실패"; exit 1
