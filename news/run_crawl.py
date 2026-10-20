@@ -39,6 +39,22 @@ SAVE_DIRECTORY = os.environ.get("NEWS_SAVE_DIR") or os.path.join(HERE, "output")
 
 DEFAULT_REGIONS = ["충청"]        # 인자 없이 실행할 때 돌릴 지역
 
+# 큰 지역을 도(道) 단위로 나눠 돌릴 때의 신문사 묶음: --part 충남 처럼 이름으로 지정한다. (--part 1/2 처럼 번갈아 나누는 방식도 쓸 수 있다)
+PART_GROUPS = {
+    "충청·대전·세종": {
+        "충남": ["대전일보", "금강일보", "중도일보", "충청투데이", "세종의소리", "세종포스트", "천안아산신문", "천안신문",
+                "아산투데이", "당진시대", "서산타임즈", "공주신문", "금산신문", "홍성신문", "계룡일보", "보령뉴스",
+                "뉴스서천", "청양신문", "태안신문", "논산포커스"],
+        "충북": ["충청일보", "충북일보", "중부매일", "동양일보", "충주신문", "제천단양뉴스", "옥천신문", "보은사람들",
+                "주간영동", "음성신문", "괴산타임즈"],
+    },
+    "전라·광주": {
+        "전북": ["전북일보", "전북도민일보", "전주일보", "익산신문", "정읍신문", "무주신문", "부안독립신문"],
+        "광주전남": ["전남일보", "남도일보", "무등일보", "전남도민일보", "목포시민신문", "광양신문", "장성군민신문",
+                  "완도신문", "해남신문"],
+    },
+}
+
 # 1. 수집 대상 검색 키워드 (보상/사업 관련 핵심 단어)
 DEFAULT_KEYWORDS = [
     "토지 보상", "보상 협의", "손실보상", "사업인정", "실시계획",
@@ -207,9 +223,13 @@ def main():
             else:
                 only = args.paper
                 if args.part:
-                    n, m = (int(x) for x in args.part.split("/"))
                     active = [x.name for x in mod.SITES if x.enabled]
-                    only = [nm for i, nm in enumerate(active) if i % m == n - 1]   # 번갈아 나눠 큰 신문사가 한쪽에 몰리지 않게 한다
+                    named = PART_GROUPS.get(name, {}).get(args.part)
+                    if named is not None:
+                        only = [nm for nm in named if nm in active]            # 이름으로 정한 묶음(예: 충남)
+                    else:
+                        n, m = (int(x) for x in args.part.split("/"))          # 번갈아 나누기(예: 1/2): 큰 신문사가 한쪽에 몰리지 않게
+                        only = [nm for i, nm in enumerate(active) if i % m == n - 1]
                     print(f"[{name}] {args.part} 부분: 활성 {len(active)}곳 중 {len(only)}곳 -> {', '.join(only)}")
                 csv_path = crawler.run_region(name, mod.SITES, only=only)
                 if csv_path and os.path.exists(csv_path):

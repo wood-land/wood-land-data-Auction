@@ -2,15 +2,15 @@ name: news-crawl
 
 on:
   schedule:
-    - cron: "0 21 * * *"   # 매일 06:00 KST (UTC 21:00) - 하루에 2개 지역씩, 6개 지역이 3일에 한 바퀴
+    - cron: "0 21 * * *"   # 매일 06:00 KST (UTC 21:00) - 하루에 한 곳씩, 7일에 한 바퀴
   workflow_dispatch:
     inputs:
       region:
-        description: "단위(쉼표 구분: 강원,경기,전라,충청,경북:1/2,경북:2/2,경남:1/2,경남:2/2). 비우면 전체를 하나씩 순서대로"
+        description: "단위(쉼표 구분: 강원,충청:충남,충청:충북,전라:전북,전라:광주전남,경남:1/2,경남:2/2,경북:1/2,경북:2/2). 비우면 전체를 하나씩 순서대로"
         required: false
         default: ""
       days:
-        description: "최근 N일 (비우면 4일. 예약 실행은 지역당 3일에 한 번이라 4일로 1일 겹친다. 처음 채울 때만 15~30)"
+        description: "최근 N일 (비우면 8일. 예약 실행은 지역당 7일에 한 번이라 8일로 1일 겹친다. 처음 채울 때만 15~30)"
         required: false
         default: ""
 
@@ -34,24 +34,32 @@ jobs:
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, datetime
-          # 8개 단위(큰 지역 경북·경남은 둘로 나눔)를 3개 조로 묶어 하루에 한 조씩 돈다. 8개 단위가 3일에 한 바퀴.
-          # 단위 표기: "지역" 또는 "지역:N/M" (그 지역 활성 신문사를 M개로 나눈 N번째)
-          GROUPS = [["충청", "강원"], ["경북:1/2", "경남:1/2", "전라"], ["경북:2/2", "경남:2/2", "경기"]]
-          ALL = [r for g in GROUPS for r in g]
+          # 7일에 한 바퀴: 하루에 한 곳씩 돈다(경기는 제외). 큰 지역은 같은 날 두 번으로 나눠 돈다(작업마다 제한 시간이 따로 있음).
+          # 단위 표기: "지역" / "지역:이름"(PART_GROUPS 의 묶음) / "지역:N/M"(활성 신문사를 M개로 번갈아 나눈 N번째)
+          DAYS = [
+              ["강원"],
+              ["충청:충남"],
+              ["충청:충북"],
+              ["전라:전북"],
+              ["전라:광주전남"],
+              ["경남:1/2", "경남:2/2"],
+              ["경북:1/2", "경북:2/2"],
+          ]
+          ALL = [u for d in DAYS for u in d]
           inp = [x for x in os.environ.get("INPUT_REGIONS", "").replace(" ", "").split(",") if x]
-          if inp:                                  # 수동 실행 + 지정: 그대로 (예: 경북:1/2,강원)
+          if inp:                                  # 수동 실행 + 지정: 그대로 (예: 충청:충남,강원)
               pick = inp
           elif os.environ["EVENT"] == "workflow_dispatch":   # 수동 실행 + 비움: 전체
               pick = ALL
-          else:                                    # 예약: 오늘 차례의 조
-              pick = GROUPS[datetime.date.today().toordinal() % 3]
+          else:                                    # 예약: 오늘 차례
+              pick = DAYS[datetime.date.today().toordinal() % len(DAYS)]
           print("regions=" + json.dumps(pick, ensure_ascii=False))
           PY
 
   crawl:
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 170
+    timeout-minutes: 200
     strategy:
       fail-fast: false
       max-parallel: 1        # 결과 DB(news_articles_pnu.db)가 파일 하나라 동시에 push 하면 충돌한다. 한 지역씩 순서대로 돈다.
@@ -92,7 +100,7 @@ jobs:
         run: |
           REGION="${UNIT%%:*}"; PART=""
           case "$UNIT" in *:*) PART="--part ${UNIT#*:}";; esac
-          python run_crawl.py "$REGION" $PART --days "${DAYS:-4}" --headless --pnu
+          python run_crawl.py "$REGION" $PART --days "${DAYS:-8}" --headless --pnu
 
       # 지역마다 바로 반영한다. 한 지역이 시간 초과로 끊겨도 이미 끝난 지역의 결과는 남는다(if: always()).
       - name: Commit PNU DB to private repo (기사 본문 CSV 는 커밋하지 않음)
