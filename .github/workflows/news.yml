@@ -2,17 +2,17 @@ name: news-crawl
 
 on:
   schedule:
-    - cron: "0 21 * * *"   # 매일 06:00 KST (UTC 21:00)
+    - cron: "0 21 * * *"   # 매일 06:00 KST (UTC 21:00) - 하루에 2개 지역씩, 6개 지역이 3일에 한 바퀴
   workflow_dispatch:
     inputs:
       region:
-        description: "지역 (예: 충청, 강원). 비우면 전체"
+        description: "지역(쉼표 구분: 강원,경기,전라,충청,경북,경남). 비우면 전체 6개 지역을 하나씩 순서대로"
         required: false
         default: ""
       days:
-        description: "최근 N일 (매일 실행은 3일이면 충분, 처음 채울 때만 15~30)"
+        description: "최근 N일 (비우면 4일. 예약 실행은 지역당 3일에 한 번이라 4일로 1일 겹친다. 처음 채울 때만 15~30)"
         required: false
-        default: "3"
+        default: ""
 
 permissions:
   contents: write
@@ -22,9 +22,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  crawl:
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    outputs:
+      regions: ${{ steps.pick.outputs.regions }}
+    steps:
+      - id: pick
+        env:
+          INPUT_REGIONS: ${{ github.event.inputs.region }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, datetime
+          # 지역을 3개 조(무거운 지역 1 + 가벼운 지역 1)로 나눠 하루에 한 조씩 돈다. 6개 지역이 3일에 한 바퀴.
+          # 1조: 충청(약 1시간)+강원(5분)  2조: 경북·대구·울산(가장 오래 걸림)+전라·광주  3조: 경남·부산+경기·인천
+          GROUPS = [["충청", "강원"], ["경북", "전라"], ["경남", "경기"]]
+          ALL = [r for g in GROUPS for r in g]
+          inp = [x for x in os.environ.get("INPUT_REGIONS", "").replace(" ", "").split(",") if x]
+          if inp:                                  # 수동 실행 + 지역 지정: 그대로
+              pick = inp
+          elif os.environ["EVENT"] == "workflow_dispatch":   # 수동 실행 + 비움: 전체
+              pick = ALL
+          else:                                    # 예약: 오늘 차례의 조
+              pick = GROUPS[datetime.date.today().toordinal() % 3]
+          print("regions=" + json.dumps(pick, ensure_ascii=False))
+          PY
+
+  crawl:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    strategy:
+      fail-fast: false
+      max-parallel: 1        # 결과 DB(news_articles_pnu.db)가 파일 하나라 동시에 push 하면 충돌한다. 한 지역씩 순서대로 돈다.
+      matrix:
+        region: ${{ fromJSON(needs.plan.outputs.regions) }}
     defaults:
       run:
         working-directory: news
@@ -53,20 +85,26 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Crawl + PNU
-        run: |
-          TARGET="${{ github.event.inputs.region }}"
-          DAYS="${{ github.event.inputs.days }}"
-          if [ -z "$TARGET" ]; then TARGET="--all"; fi
-          python run_crawl.py $TARGET --days "${DAYS:-3}" --headless --pnu
+      - name: Crawl + PNU (${{ matrix.region }})
+        env:
+          REGION: ${{ matrix.region }}
+          DAYS: ${{ github.event.inputs.days }}
+        run: python run_crawl.py "$REGION" --days "${DAYS:-4}" --headless --pnu
 
+      # 지역마다 바로 반영한다. 한 지역이 시간 초과로 끊겨도 이미 끝난 지역의 결과는 남는다(if: always()).
       - name: Commit PNU DB to private repo (기사 본문 CSV 는 커밋하지 않음)
+        if: always()
         working-directory: db
+        env:
+          REGION: ${{ matrix.region }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add news/news_articles_pnu.db
           if git diff --cached --quiet; then echo "변경 없음"; exit 0; fi
-          git commit -m "news: PNU DB 갱신 $(date -u +%F)"
-          git pull --rebase origin main
-          git push
+          git commit -m "news: ${REGION} PNU DB 갱신 $(date -u +%F)"
+          for i in 1 2 3 4 5 6; do
+            git pull --rebase origin main && git push && exit 0
+            sleep $((RANDOM % 10 + 5))
+          done
+          echo "::error::push 실패"; exit 1
