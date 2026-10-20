@@ -170,7 +170,8 @@ SITES = [
         default_area="상주시",
         encoding="euc-kr",
         fetch="requests",
-        enabled=True,
+        enabled=False,
+        disabled_reason="GitHub Actions(해외 IP)에서 접속 불가(ConnectionError, 2026-10-20 확인). 국내 IP PC 에서는 접속됨 - PC 수집용으로만 쓸 수 있음",
         note="상주시 대표 지역신문. search_word 및 idx_num 실측 통과",
     ),
     Site(
@@ -347,7 +348,7 @@ SITES = [
         list_item_sel="ul.sch_res_list li, div.sch_res_list li, ul.search_list li, li",
         list_title_sel="a[href*='wr_id=']",
         list_date_sel="span.date, .date",
-        article_date_sel="ul.art_info, .art_info, div.view_info, .date, li",
+        article_date_sel="ul.art_info",
         article_body_sel="#news_body_area, #bo_v_con, div.view_con",
         link_contains="wr_id=",
         homepage_url="http://www.phsmnews.com",
