@@ -45,6 +45,13 @@ def _ndsoft_verified(name: str, area: str, base_url: str,
     )
 
 
+def _disabled(site: Site, reason: str) -> Site:
+    """수집에서 제외(사유를 남긴다)."""
+    site.enabled = False
+    site.disabled_reason = reason
+    return site
+
+
 def _iksan_verified(name: str, area: str, base_url: str, note: str = "") -> Site:
     """익산신문 솔루션 기반 실측 검증 통과 신문사 생성 (경산, 의성, 청도, 영덕, 포항)"""
     return Site(
@@ -113,8 +120,9 @@ SITES = [
                      note="경북 안동시 대표 인터넷신문. NDSoft POST 20건 실측"),
     _ndsoft_verified("영천시민신문", "영천시", "http://www.ycnews.co.kr",
                      note="경북 영천시 대표 주간지. NDSoft POST 20건 실측"),
-    _ndsoft_verified("청송신문", "청송군", "http://www.csnews.co.kr",
-                     note="경북 청송군 대표 지역신문. NDSoft POST 20건 실측"),
+    # 청송신문: csnews.co.kr 이 2026-10-20 현재 consumernews.co.kr(다른 사이트)로 이동해 수집 불가 -> 제외
+    _disabled(_ndsoft_verified("청송신문", "청송군", "http://www.csnews.co.kr"),
+              "도메인 csnews.co.kr 이 다른 사이트(consumernews.co.kr)로 연결됨. 새 주소 확인 전까지 제외(2026-10-20)"),
     _ndsoft_verified("봉화일보", "봉화군", "http://www.bonghwanews.co.kr",
                      note="경북 봉화군 대표 인터넷신문. NDSoft POST 20건 실측"),
 
@@ -246,28 +254,28 @@ SITES = [
     Site(
         name="경북매일",
         search_url="https://www.kbmaeil.com/search/detailSearch?searchType=detail&organization=&searchRange=title_subtitle_body_reporterName&storyClass=&searchMedia=all&reporterName=&from=&to=&searchWord1={kw}&searchCondition=and&searchWord2=&sort=post",
-        list_item_sel="div.article_list li, ul.news_list li, div.search_result li, table tr, li",
-        list_title_sel="a[href*='articleView.html'], a[href*='article/']",
-        list_date_sel="span.date, .date",
-        article_date_sel="div.date, span.date, .info_date",
-        article_body_sel="#articleBody, #article-view-content-div, div.article_body",
-        link_contains="article",
+        list_item_sel="div.thum_box",
+        list_title_sel="h3 a",
+        list_date_sel="",
+        article_date_sel="div.news_date",
+        article_body_sel="div.news_content",
+        link_contains="/article/",
         homepage_url="https://www.kbmaeil.com",
         default_area="경상북도",
-        fetch="selenium",
+        fetch="requests",
         enabled=True,
-        note="경북 대표 일간지. detailSearch Selenium 실측 반영",
+        note="경북 대표 일간지. 검색 결과가 정적 HTML이라 requests 로 수집(2026-10-20 Selenium 목록 0건 문제 수정)",
     ),
     Site(
         name="성주신문",
-        search_url="http://www.seongjuro.co.kr/news/search.php?search_order={kw}&page={page}",
+        search_url="https://www.seongjuro.co.kr/news/search.php?search_order={kw}&page={page}",
         list_item_sel="table tr td, table tr",
         list_title_sel="a[href*='view.php?idx=']",
         list_date_sel="",
         article_date_sel="td.photo1_1, td, span.date",
         article_body_sel="#textinput, #content, td[width='590'], div#content",
         link_contains="view.php?idx=",
-        homepage_url="http://www.seongjuro.co.kr",
+        homepage_url="https://www.seongjuro.co.kr",
         default_area="성주군",
         fetch="requests",
         enabled=True,
@@ -344,6 +352,7 @@ SITES = [
         link_contains="wr_id=",
         homepage_url="http://www.phsmnews.com",
         default_area="포항시",
+        encoding="euc-kr",
         fetch="requests",
         enabled=True,
         note="포항시 대표 지역신문. 공식도메인(phsmnews.com) 그누보드 41건 실측 통과",
