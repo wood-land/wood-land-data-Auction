@@ -96,11 +96,25 @@ jobs:
       - name: Crawl + PNU (${{ matrix.region }})
         env:
           UNIT: ${{ matrix.region }}
+          NEWS_UNIT: ${{ matrix.region }}
           DAYS: ${{ github.event.inputs.days }}
+          # 수집 통계를 gosi 와 같은 구글시트의 news_실행기록 / news_신문사별 탭에 남긴다(기사 본문·주소는 보내지 않음)
+          GOOGLE_SHEET_ID: ${{ secrets.GOSI_GOOGLE_SHEET_ID }}
+          GOOGLE_CREDENTIALS_EDITER: ${{ secrets.GOOGLE_CREDENTIALS_EDITER }}
         run: |
           REGION="${UNIT%%:*}"; PART=""
           case "$UNIT" in *:*) PART="--part ${UNIT#*:}";; esac
           python run_crawl.py "$REGION" $PART --days "${DAYS:-8}" --headless --pnu
+
+      # 시간 초과·오류로 파이썬이 끝까지 못 돌았으면 실행기록에 실패 1줄만 남긴다.
+      - name: Log failure to Google Sheet
+        if: failure() || cancelled()
+        env:
+          UNIT: ${{ matrix.region }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOSI_GOOGLE_SHEET_ID }}
+          GOOGLE_CREDENTIALS_EDITER: ${{ secrets.GOOGLE_CREDENTIALS_EDITER }}
+          STATUS: ${{ job.status }}
+        run: python common/run_log.py --unit "$UNIT" --status "실패/중단($STATUS)"
 
       # 지역마다 바로 반영한다. 한 지역이 시간 초과로 끊겨도 이미 끝난 지역의 결과는 남는다(if: always()).
       - name: Commit PNU DB to private repo (기사 본문 CSV 는 커밋하지 않음)

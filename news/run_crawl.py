@@ -24,6 +24,7 @@ import importlib
 import os
 import re
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -231,6 +232,8 @@ def main():
                         n, m = (int(x) for x in args.part.split("/"))          # 번갈아 나누기(예: 1/2): 큰 신문사가 한쪽에 몰리지 않게
                         only = [nm for i, nm in enumerate(active) if i % m == n - 1]
                     print(f"[{name}] {args.part} 부분: 활성 {len(active)}곳 중 {len(only)}곳 -> {', '.join(only)}")
+                unit = os.environ.get("NEWS_UNIT") or (f"{name}:{args.part}" if args.part else name)
+                t_start = time.time()
                 csv_path = crawler.run_region(name, mod.SITES, only=only)
                 if csv_path and os.path.exists(csv_path):
                     # 크롤링 완료 후 자동으로 주소 완전화 및 중복 기사 1건만 남기기 정제 실행
@@ -243,6 +246,9 @@ def main():
                         db_path = os.path.join(settings.save_directory, "news_articles_pnu.db")
                         print(f"\n🚀 [--pnu] 정제된 기사의 주소 완성 및 PNU 발급 파이프라인 가동...")
                         process_csv_file(target_for_pnu, db_path)
+                # 구글시트에 실행기록·신문사별 통계를 남긴다(키가 없거나 실패해도 수집은 그대로 끝난다)
+                from common.run_log import log_run
+                log_run(unit, name, args.days, crawler.last_run.stats, (time.time() - t_start) / 60)
     except KeyboardInterrupt:
         print("\n\n🛑 [중단 안내] 사용자에 의해 작업이 안전하게 중단되었습니다 (Ctrl+C).")
         print("💾 중단 시점까지 수집된 모든 기사는 CSV 파일에 실시간으로 안전하게 저장되어 있습니다.")

@@ -514,6 +514,7 @@ class SiteStats:
     irrelevant_skipped: int = 0
     errors: int = 0
     failed: str = ""
+    seconds: float = 0.0       # 이 신문사에 쓴 시간(초). 구글시트 수집로그용
 
 
 class Crawler:
@@ -610,6 +611,7 @@ class Crawler:
         for site in slow:
             run.collect_site(site)
         run.print_summary()
+        self.last_run = run          # 호출한 쪽이 신문사별 통계(run.stats)를 읽을 수 있게
         return run.csv_path
 
     # ------------------------------ 점검 ------------------------------
@@ -708,6 +710,14 @@ class RegionRun:
         st = self.c.st
         stats = self.stats.setdefault(site.name, SiteStats(site.name))
         print(f"\n########## {site.name} ##########")
+        t0 = time.time()
+        try:
+            self._collect_site_keywords(site, stats)
+        finally:
+            stats.seconds += time.time() - t0
+
+    def _collect_site_keywords(self, site: Site, stats: SiteStats):
+        st = self.c.st
         for idx, keyword in enumerate(st.keywords, start=1):
             print(f"\n[{site.name}] ({idx}/{len(st.keywords)}) 검색어 '{keyword}' 검색 중...")
             try:
