@@ -95,6 +95,7 @@ def main():
     parser.add_argument("regions", nargs="*", help="실행할 지역 이름 (예: 강원 충청)")
     parser.add_argument("--all", action="store_true", help="등록된 모든 지역 실행")
     parser.add_argument("--paper", action="append", help="지역 안에서 이 신문사만 (여러 번 지정 가능)")
+    parser.add_argument("--part", default="", help="지역의 활성 신문사를 M개로 나눠 N번째만 수집 (예: 1/2). 큰 지역을 나눠 돌릴 때 사용")
     parser.add_argument("--check", action="store_true", help="저장 없이 선택자만 점검")
     parser.add_argument("--keyword", default="일대", help="--check 에서 쓸 검색어 (기본: 일대)")
     parser.add_argument("--days", type=int, default=SEARCH_PERIOD_DAYS, help="수집 기간(일)")
@@ -204,7 +205,13 @@ def main():
                            for s in mod.SITES if not args.paper or s.name in args.paper}
                 print("\n점검 결과:", {k: ("정상" if v else "확인 필요") for k, v in results.items()})
             else:
-                csv_path = crawler.run_region(name, mod.SITES, only=args.paper)
+                only = args.paper
+                if args.part:
+                    n, m = (int(x) for x in args.part.split("/"))
+                    active = [x.name for x in mod.SITES if x.enabled]
+                    only = [nm for i, nm in enumerate(active) if i % m == n - 1]   # 번갈아 나눠 큰 신문사가 한쪽에 몰리지 않게 한다
+                    print(f"[{name}] {args.part} 부분: 활성 {len(active)}곳 중 {len(only)}곳 -> {', '.join(only)}")
+                csv_path = crawler.run_region(name, mod.SITES, only=only)
                 if csv_path and os.path.exists(csv_path):
                     # 크롤링 완료 후 자동으로 주소 완전화 및 중복 기사 1건만 남기기 정제 실행
                     from clean_news_csv import process_clean_file

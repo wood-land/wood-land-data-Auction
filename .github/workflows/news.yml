@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       region:
-        description: "지역(쉼표 구분: 강원,경기,전라,충청,경북,경남). 비우면 전체 6개 지역을 하나씩 순서대로"
+        description: "단위(쉼표 구분: 강원,경기,전라,충청,경북:1/2,경북:2/2,경남:1/2,경남:2/2). 비우면 전체를 하나씩 순서대로"
         required: false
         default: ""
       days:
@@ -34,12 +34,12 @@ jobs:
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, datetime
-          # 지역을 3개 조(무거운 지역 1 + 가벼운 지역 1)로 나눠 하루에 한 조씩 돈다. 6개 지역이 3일에 한 바퀴.
-          # 1조: 충청(약 1시간)+강원(5분)  2조: 경북·대구·울산(가장 오래 걸림)+전라·광주  3조: 경남·부산+경기·인천
-          GROUPS = [["충청", "강원"], ["경북", "전라"], ["경남", "경기"]]
+          # 8개 단위(큰 지역 경북·경남은 둘로 나눔)를 3개 조로 묶어 하루에 한 조씩 돈다. 8개 단위가 3일에 한 바퀴.
+          # 단위 표기: "지역" 또는 "지역:N/M" (그 지역 활성 신문사를 M개로 나눈 N번째)
+          GROUPS = [["충청", "강원"], ["경북:1/2", "경남:1/2", "전라"], ["경북:2/2", "경남:2/2", "경기"]]
           ALL = [r for g in GROUPS for r in g]
           inp = [x for x in os.environ.get("INPUT_REGIONS", "").replace(" ", "").split(",") if x]
-          if inp:                                  # 수동 실행 + 지역 지정: 그대로
+          if inp:                                  # 수동 실행 + 지정: 그대로 (예: 경북:1/2,강원)
               pick = inp
           elif os.environ["EVENT"] == "workflow_dispatch":   # 수동 실행 + 비움: 전체
               pick = ALL
@@ -87,17 +87,21 @@ jobs:
 
       - name: Crawl + PNU (${{ matrix.region }})
         env:
-          REGION: ${{ matrix.region }}
+          UNIT: ${{ matrix.region }}
           DAYS: ${{ github.event.inputs.days }}
-        run: python run_crawl.py "$REGION" --days "${DAYS:-4}" --headless --pnu
+        run: |
+          REGION="${UNIT%%:*}"; PART=""
+          case "$UNIT" in *:*) PART="--part ${UNIT#*:}";; esac
+          python run_crawl.py "$REGION" $PART --days "${DAYS:-4}" --headless --pnu
 
       # 지역마다 바로 반영한다. 한 지역이 시간 초과로 끊겨도 이미 끝난 지역의 결과는 남는다(if: always()).
       - name: Commit PNU DB to private repo (기사 본문 CSV 는 커밋하지 않음)
         if: always()
         working-directory: db
         env:
-          REGION: ${{ matrix.region }}
+          UNIT: ${{ matrix.region }}
         run: |
+          REGION="$(echo "$UNIT" | tr '/' '-')"   # 경북:1/2 -> 경북:1-2 (커밋 메시지용)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add news/news_articles_pnu.db

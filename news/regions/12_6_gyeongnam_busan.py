@@ -80,7 +80,8 @@ SITES: list[Site] = [
         homepage_url="https://www.busan.com",
         default_area="부산광역시",
         fetch="requests",
-        enabled=True,
+        enabled=False,
+        disabled_reason="부산광역시 지역은 수집 대상에서 제외(2026-10-20 결정)",
         note="부산 대표 정론 일간지. GET search_string 검색 및 본문·날짜 추출 실측 완료",
     ),
     Site(
@@ -101,7 +102,8 @@ SITES: list[Site] = [
             ("page", "{page}"),
         ),
         encoding="euc-kr",
-        enabled=True,
+        enabled=False,
+        disabled_reason="부산광역시 지역은 수집 대상에서 제외(2026-10-20 결정)",
         note="부산 대표 일간지. POST stitle 검색 및 hit_news 본문 추출 실측 완료",
     ),
 
