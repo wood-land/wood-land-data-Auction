@@ -6,6 +6,7 @@ run_scheduled.py - GitHub Actions(스케줄)용 수집 실행기: 고시공고 +
   python run_scheduled.py --only gazette --module 경기
   python run_scheduled.py --only gosigongo --province 강원
   python run_scheduled.py --region 경북 --blocked only   # 호스티드 러너에서 막히는 게시판만(국내 IP 러너용, core/blocked_sites.py)
+  python run_scheduled.py --region 전남 --preflight      # 시작 전에 이 IP 가 사이트들에 닿는지 확인, 막힌 IP 면 수집 없이 종료코드 75(core/preflight.py)
 결과는 data/gosi/gosigongo.sqlite (또는 --region 지정 시 data/gosi/{지역}.sqlite) 에 누적된다(core/sqlite_store.py). 공보 게시판 목록은
 output/시군구_공보게시판_목록_new.xlsx(git 추적) 의 '공보게시판' 시트를 읽는다.
 """
@@ -29,6 +30,7 @@ from core.pnu import PnuResolver  # noqa: E402
 from core.run_log import LOG  # noqa: E402
 from core.board_crawler import run_city  # noqa: E402
 from core.blocked_sites import should_run  # noqa: E402
+from core import preflight as PF  # noqa: E402
 import run_gazette as G  # noqa: E402
 from run_gosigongo import discover_provinces  # noqa: E402
 
@@ -65,6 +67,22 @@ def _runner_info():
     except Exception:
         ip = "IP 확인 실패"
     return f"{where} {os.environ.get('RUNNER_OS', sys.platform)} IP {ip}"
+
+
+def board_urls(provinces, modules, cities, excel, only, region, blocked):
+    """이번 실행이 열어 볼 게시판 주소들(사전 점검용). 실제 수집과 같은 조건(지역·지자체·막힌 게시판 제외)으로 고른다."""
+    urls = []
+    if only != "gazette":
+        P = discover_provinces()
+        for name in provinces or list(P):
+            for city in getattr(P.get(name), "CITIES", []):
+                if (not cities or city.city in cities) and should_run(blocked, region or name, city.city):
+                    urls.append(city.base_url)
+    if only != "gosigongo":
+        for b in G.load_boards(excel):
+            if (not modules or b["module"] in modules) and (not cities or b["city"] in cities) and should_run(blocked, b["module"], b["city"]):
+                urls.append(b["url"])
+    return urls
 
 
 def job_gosigongo(con, days, delay, provinces, cities, region=None, blocked="all", reread=False):
@@ -153,6 +171,8 @@ def main():
                     help="이미 처리한 글(seen_posts)도 건너뛰지 않고 모두 다시 읽는다(추출 코드를 고친 뒤 수동 재수집용)")
     ap.add_argument("--log-prefix", default="",
                     help="수집로그 시트 탭 이름 앞에 붙일 말(PC 수집은 'PC' -> 'PC경북_게시판상태'). Actions 로그와 섞이지 않게 한다")
+    ap.add_argument("--preflight", action="store_true",
+                    help="수집 전에 이 IP 가 지역 사이트들에 닿는지 확인하고, 대부분 안 닿으면 수집하지 않고 종료코드 75 로 끝낸다(워크플로가 새 러너로 재시도)")
     ap.add_argument("--blocked", choices=["all", "skip", "only"], default="all",
                     help="호스티드 러너에서 막히는 게시판(core/blocked_sites.py): all=전부(기본), skip=건너뜀, only=그곳만(국내 IP 러너용)")
     a = ap.parse_args()
@@ -165,6 +185,7 @@ def main():
     LOG.region = a.log_prefix + (a.region or "전체")
     log_path = str(DATA_DIR / "logs" / f"{LOG.region}_수집로그.xlsx")
     con = S.connect(db)
+    blocked_ip = False
     LOG.summary("실행환경", f"{_runner_info()}; 모드 blocked={a.blocked}; 고시공고 {a.gosi_days}일, 공보 {a.gazette_days}일")
     try:
         # 이전 실행에서 PNU로 못 바꾼 주소를 먼저 다시 시도(코드/규칙이 개선됐으면 여기서 복구된다)
@@ -179,14 +200,26 @@ def main():
         print(msg)
         S.log_run(con, started, "retry", 0, msg)
         S.prune_old(con)  # 오래된 점검용 행 정리(필지·공고는 그대로)
-        if a.only != "gazette":
+        if a.preflight:
+            ok, total, bad = PF.probe(board_urls(provinces, modules, a.city, a.excel, a.only, a.region, a.blocked))
+            msg = f"사전 점검: 사이트 {total}곳 중 {ok}곳 접속 가능" + (f", 안 닿는 곳 {bad[:8]}" if bad else "")
+            if PF.looks_blocked(ok, total):
+                msg += f" -> 이 러너 IP 가 막힌 것으로 보여 수집하지 않음(종료코드 {PF.EXIT_BLOCKED}, 새 러너로 재시도)"
+                blocked_ip = True
+            print(msg)
+            LOG.summary("사전점검", msg)
+        if blocked_ip:
+            pass
+        elif a.only != "gazette":
             job_gosigongo(con, a.gosi_days, a.delay, provinces, a.city, a.region, a.blocked, a.reread)
-        if a.only != "gosigongo":
+        if not blocked_ip and a.only != "gosigongo":
             job_gazette(con, a.gazette_days, a.workers, a.excel, modules, a.city, a.blocked, a.reread)
     finally:
         con.close()
         LOG.flush_sheets()
         LOG.flush(log_path)  # 문제 단서(원인코드·조치 힌트)를 엑셀로 남긴다. 실패해도 수집 결과에는 영향 없음
+    if blocked_ip:
+        sys.exit(PF.EXIT_BLOCKED)
 
 
 if __name__ == "__main__":

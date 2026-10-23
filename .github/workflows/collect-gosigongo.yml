@@ -24,6 +24,10 @@ on:
         description: "수집 기간(일, 비우면 7). 오래된 글을 다시 읽을 때만 늘린다(예: 30)"
         required: false
         default: ""
+      attempt:
+        description: "(자동) 러너 IP 차단 의심으로 다시 도는 횟수. 사람이 넣을 필요 없음"
+        required: false
+        default: "1"
 
 permissions:
   contents: read   # 이 저장소에는 쓰지 않는다(결과는 DB 저장소에만 올린다)
@@ -60,6 +64,9 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 340
+    permissions:
+      contents: read
+      actions: write   # 러너 IP 가 막혔을 때 같은 지역을 새 러너로 다시 실행하려고 이 워크플로를 호출한다
     defaults:
       run:
         working-directory: gosi
@@ -105,9 +112,13 @@ jobs:
         run: test -n "$KAKAO_REST_API_KEY" || { echo "::error::Secret KAKAO_REST_API_KEY 가 없습니다(PNU 변환 불가)"; exit 1; }
 
       # --blocked skip: 이 러너(미국 IP)에서 막히는 게시판(core/blocked_sites.py)은 건너뛴다. 그곳은 국내 IP PC 의 '★PC수집_…_더블클릭_v….bat' 이 수집한다.
+      # --preflight: 시작 전에 이 러너 IP 가 지역 사이트들에 닿는지 본다. 대부분 안 닿으면(2026-10-23: 러너 한 대가 전남 25곳 전부 막힘) 수집하지 않고 종료코드 75 로 끝나,
+      # 아래 'Retry' 단계가 같은 지역을 새 러너(다른 IP)로 다시 실행한다. 세 번째 시도부터는 점검 없이 그대로 수집해 오류 로그를 남긴다.
       - name: Collect ${{ matrix.region }} -> SQLite
+        id: collect
         env:
           PYTHONIOENCODING: utf-8
+          ATTEMPT: ${{ github.event.inputs.attempt }}
           ONLY: ${{ github.event.inputs.only }}
           REREAD: ${{ github.event.inputs.reread }}
           DAYS: ${{ github.event.inputs.days }}
@@ -118,10 +129,16 @@ jobs:
           GOOGLE_SHEET_ID: ${{ secrets.GOSI_GOOGLE_SHEET_ID }}
         run: |
           ARGS="--region $REGION --blocked skip"
+          [ "${ATTEMPT:-1}" -lt 3 ] && ARGS="$ARGS --preflight"
           [ -n "$ONLY" ] && ARGS="$ARGS --only $ONLY"
           [ "$REREAD" = "true" ] && ARGS="$ARGS --reread"
           [ -n "$DAYS" ] && ARGS="$ARGS --gosi-days $DAYS --gazette-days $DAYS"
+          set +e
           python run_scheduled.py $ARGS
+          rc=$?
+          set -e
+          if [ "$rc" -eq 75 ]; then echo "러너 IP 차단 의심 -> 새 러너로 재시도"; echo "retry=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          exit $rc
 
       - name: Commit SQLite (비공개 DB 저장소)
         if: always()
@@ -142,3 +159,20 @@ jobs:
             sleep $((RANDOM % 10 + 5))
           done
           echo "::error::push 실패"; exit 1
+
+      - name: Retry ${{ matrix.region }} on a new runner (러너 IP 차단 의심)
+        if: steps.collect.outputs.retry == '1'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGION: ${{ matrix.region }}
+          ATTEMPT: ${{ github.event.inputs.attempt }}
+          ONLY: ${{ github.event.inputs.only }}
+          REREAD: ${{ github.event.inputs.reread }}
+          DAYS: ${{ github.event.inputs.days }}
+        run: |
+          NEXT=$(( ${ATTEMPT:-1} + 1 ))
+          sleep 60   # 같은 IP 가 다시 배정되는 일을 줄이려고 잠시 쉰다
+          gh workflow run collect-gosigongo.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" \
+            -f regions="$REGION" -f attempt="$NEXT" -f only="$ONLY" -f reread="$REREAD" -f days="$DAYS"
+          echo "::warning::$REGION: 러너 IP 차단 의심으로 수집하지 않음 -> ${NEXT}번째 시도를 새로 예약했습니다"
