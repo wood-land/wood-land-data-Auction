@@ -186,7 +186,9 @@ def main():
     log_path = str(DATA_DIR / "logs" / f"{LOG.region}_수집로그.xlsx")
     con = S.connect(db)
     blocked_ip = False
-    LOG.summary("실행환경", f"{_runner_info()}; 모드 blocked={a.blocked}; 고시공고 {a.gosi_days}일, 공보 {a.gazette_days}일")
+    attempt = os.environ.get("ATTEMPT") or "1"  # 워크플로가 러너 IP 차단 의심으로 다시 돌린 횟수(1=첫 실행)
+    LOG.summary("실행환경", f"{_runner_info()}; 모드 blocked={a.blocked}; 고시공고 {a.gosi_days}일, 공보 {a.gazette_days}일; 시도 {attempt}회차"
+                          f"{' (미리 점검 켬)' if a.preflight else ''}")
     try:
         # 이전 실행에서 PNU로 못 바꾼 주소를 먼저 다시 시도(코드/규칙이 개선됐으면 여기서 복구된다)
         n_reset = S.reset_recent_unresolved(con)  # 추출 규칙 버전이 오르면 최근 글의 미해결 행을 비워 새 규칙으로 다시 만들게 한다
@@ -202,7 +204,9 @@ def main():
         S.prune_old(con)  # 오래된 점검용 행 정리(필지·공고는 그대로)
         if a.preflight:
             ok, total, bad = PF.probe(board_urls(provinces, modules, a.city, a.excel, a.only, a.region, a.blocked))
-            msg = f"사전 점검: 사이트 {total}곳 중 {ok}곳 접속 가능" + (f", 안 닿는 곳 {bad[:8]}" if bad else "")
+            msg = f"사전 점검(시도 {attempt}회차): 사이트 {total}곳 중 {ok}곳 접속 가능({ok * 100 // max(total, 1)}%, 기준 {int(PF.MIN_OK_RATIO * 100)}% 미만이면 차단 의심)"
+            if bad:
+                msg += f", 안 닿는 {len(bad)}곳 단계별 {PF.stage_counts(bad)}, 예 {PF.stage_examples(bad, 5)}"
             if PF.looks_blocked(ok, total):
                 msg += f" -> 이 러너 IP 가 막힌 것으로 보여 수집하지 않음(종료코드 {PF.EXIT_BLOCKED}, 새 러너로 재시도)"
                 blocked_ip = True
@@ -216,6 +220,10 @@ def main():
             job_gazette(con, a.gazette_days, a.workers, a.excel, modules, a.city, a.blocked, a.reread)
     finally:
         con.close()
+        net = LOG.network_summary()  # 목록 오류가 있으면 접속 단계별로 세어 러너 IP 차단/사이트 문제를 한 줄로 판정(게시판상태 행에도 진단이 붙는다)
+        if net:
+            print(net)
+            LOG.summary("접속진단", net)
         LOG.flush_sheets()
         LOG.flush(log_path)  # 문제 단서(원인코드·조치 힌트)를 엑셀로 남긴다. 실패해도 수집 결과에는 영향 없음
     if blocked_ip:

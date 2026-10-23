@@ -53,5 +53,60 @@ class PreflightTest(unittest.TestCase):
         self.assertNotIn("대구", B.BLOCKED_ON_HOSTED)
 
 
+class NetworkDiagTest(unittest.TestCase):
+    """수집 로그에 접속 실패 원인(단계)이 남고, 지역 단위로 '러너 IP 차단 / 사이트 문제'가 판정되는지 확인한다."""
+
+    def setUp(self):
+        from core.run_log import RunLog
+        self.log = RunLog()
+        self.log.region = "시험"
+        self._orig = PF.diagnose_host
+        self.codes = {}
+        PF.diagnose_host = lambda host, port=443, timeout=6: (self.codes.get(host, "TCP_TIMEOUT"), "시험")
+
+    def tearDown(self):
+        PF.diagnose_host = self._orig
+
+    def board(self, city, host, status="오류(목록)"):
+        err = f"ConnectTimeout: HTTPSConnectionPool(host='{host}', port=443): Max retries exceeded"
+        self.log.board({"city": city, "kind": "공보", "status": status, "detail": err, "url": f"https://{host}/x"})
+
+    def test_hint_gets_stage_and_is_added_once(self):
+        self.board("A", "a.go.kr")
+        self.log.enrich_network()
+        self.log.enrich_network()
+        hint = self.log._rows["게시판상태"][0][12]
+        self.assertEqual(hint.count("진단["), 1)
+        self.assertIn("진단[TCP_TIMEOUT] a.go.kr", hint)
+
+    def test_whole_region_unreachable_is_runner_block(self):
+        for i in range(6):
+            self.board(f"c{i}", f"h{i}.go.kr")
+        self.assertIn("러너 IP 차단 의심", self.log.network_summary())
+
+    def test_reachable_now_means_rate_limit(self):
+        for i in range(6):
+            self.codes[f"h{i}.go.kr"] = "OK"
+            self.board(f"c{i}", f"h{i}.go.kr")
+        self.assertIn("요청 빈도 제한", self.log.network_summary())
+
+    def test_few_failures_are_site_specific(self):
+        self.board("ok1", "x.go.kr", status="정상")
+        for i in range(8):
+            self.board(f"ok{i + 2}", f"y{i}.go.kr", status="정상")
+        self.board("bad", "z.go.kr")
+        s = self.log.network_summary()
+        self.assertIn("일부 사이트만", s)
+        self.assertIn("1/10곳", s)
+
+    def test_no_errors_no_summary(self):
+        self.board("ok", "x.go.kr", status="정상")
+        self.assertEqual(self.log.network_summary(), "")
+
+    def test_stage_counts(self):
+        self.codes = {"a.go.kr": "DNS"}
+        self.assertEqual(PF.stage_counts(["a.go.kr:443", "b.go.kr:443", "c.go.kr:443"]), {"TCP_TIMEOUT": 2, "DNS": 1})
+
+
 if __name__ == "__main__":
     unittest.main()

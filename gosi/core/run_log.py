@@ -18,6 +18,7 @@ core/run_log.py - 수집 중 생긴 문제를 엑셀(xlsx)로 남겨, 어떤 문
 """
 import json
 import os
+import re
 import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -135,6 +136,70 @@ class RunLog:
         top = ", ".join(f"{k} {v}" for k, v in sorted(cnt.items(), key=lambda x: -x[1]))
         return f"문서 {len(codes)}건 [{top}]"
 
+    # ---- 접속 실패 원인 진단 -------------------------------------------------------------
+    _HOST_IN_ERROR = re.compile(r"host='([^']+)', port=(\d+)")
+    _DIAG_TAG = re.compile(r"진단\[(\w+)\]")
+
+    @classmethod
+    def _failed_endpoint(cls, row):
+        """'오류(목록)' 행에서 실제로 실패한 (호스트, 포트). 오류·상세 문장 속 접속 예외에 호스트가 있으면 그것을, 없으면 게시판 URL 을 쓴다."""
+        from urllib.parse import urlparse
+        m = cls._HOST_IN_ERROR.search(f"{row[11]} {row[5]}")
+        if m:
+            return m.group(1), int(m.group(2))
+        u = urlparse(str(row[13] or ""))
+        if u.hostname:
+            return u.hostname, u.port or (443 if u.scheme == "https" else 80)
+        return None
+
+    def enrich_network(self):
+        """'오류(목록)' 게시판 행의 조치 힌트에 접속 단계 진단(DNS/TCP/TLS/HTTP 중 어디서 끊기는지)을 덧붙인다.
+        오류 문장에는 예외 이름만 있어(ConnectTimeout 등) 러너 IP 차단인지 사이트 문제인지 알 수 없기 때문이다. 실패 직후가 아니라 기록할 때
+        한 번 다시 접속해 보므로 '지금은 열림(OK)' 이면 수집 중에만 막힌 것(요청 빈도 제한·간헐 차단)이라는 단서가 된다. 여러 번 불러도 한 번만 덧붙는다."""
+        from concurrent.futures import ThreadPoolExecutor
+        from core import preflight as PF
+        with self._lock:
+            targets = [(row, self._failed_endpoint(row)) for row in self._rows["게시판상태"]
+                       if str(row[4]).startswith("오류(목록)") and "진단[" not in str(row[12])]
+        eps = sorted({ep for _, ep in targets if ep})
+        if not eps:
+            return
+        try:
+            with ThreadPoolExecutor(12) as ex:
+                res = dict(zip(eps, ex.map(lambda ep: PF.diagnose_host(*ep), eps)))
+        except Exception as e:  # noqa: BLE001 - 진단이 실패해도 로그 기록은 계속한다
+            print(f"[경고] 접속 진단 실패: {type(e).__name__}: {str(e)[:120]}")
+            return
+        with self._lock:
+            for row, ep in targets:
+                if ep and "진단[" not in str(row[12]):
+                    code, text = res[ep]
+                    row[12] = f"{row[12]} | 진단[{code}] {ep[0]}: {text}. {PF.NET_HINTS.get(code, '')}".strip(" |")
+
+    def network_summary(self):
+        """이번 실행의 목록 오류를 접속 단계별로 세어, 러너 IP 차단인지 사이트별 문제인지 한 줄로 판정한다(없으면 빈 문자열)."""
+        self.enrich_network()
+        with self._lock:
+            boards = [r for r in self._rows["게시판상태"] if not str(r[4]).startswith("건너뜀")]
+            errs = [r for r in boards if str(r[4]).startswith("오류(목록)")]
+        if not errs:
+            return ""
+        codes = {}
+        for r in errs:
+            m = self._DIAG_TAG.search(str(r[12]))
+            c = m.group(1) if m else "미진단"
+            codes[c] = codes.get(c, 0) + 1
+        dist = ", ".join(f"{k} {v}" for k, v in sorted(codes.items(), key=lambda x: -x[1]))
+        n, k = len(boards), len(errs)
+        network = codes.get("TCP_TIMEOUT", 0) + codes.get("DNS", 0)
+        if k >= 5 and k / n >= 0.8 and network / k >= 0.8:
+            verdict = "지역 전체 접속 불가(TCP시간초과·DNS) -> 이 러너 IP 차단 의심. 국내 IP 에서 열리면 새 러너로 재시도, 계속되면 blocked_sites 후보"
+        elif k >= 5 and k / n >= 0.8 and codes.get("OK", 0) / k >= 0.5:
+            verdict = "사이트는 지금 열림 -> 수집 중 요청 빈도 제한이나 일시 장애 의심. --delay·재시도 점검"
+        else:
+            verdict = "일부 사이트만 문제 -> 게시판상태 탭의 '진단[...]' 힌트로 사이트별 원인 확인"
+        return f"목록 오류 {k}/{n}곳 [{dist}] {verdict}"
+
     def counts(self):
         with self._lock:
             return {k: len(v) for k, v in self._rows.items()}
@@ -160,6 +225,7 @@ class RunLog:
 
     def flush_sheets(self):
         """이번 실행 기록을 구글시트 탭('{지역}_{시트명}')에 이어 붙인다. 실패해도 예외를 던지지 않는다."""
+        self.enrich_network()
         try:
             sess, sheet_id = self._sheets_session()
             if sess is None:
@@ -196,6 +262,7 @@ class RunLog:
 
     def flush(self, path):
         """누적 엑셀에 이번 실행 기록을 이어 붙여 저장한다. 실패해도 예외를 던지지 않는다."""
+        self.enrich_network()
         try:
             from openpyxl import Workbook, load_workbook
             from openpyxl.styles import Font, PatternFill
