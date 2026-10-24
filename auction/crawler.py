@@ -809,6 +809,32 @@ ISSUES_HEADERS = ["실행시각(KST)", "대상탭", "종류(A/B)", "tid", "사�
 FAILURE_REASONS = ("추출실패", "stale", "예외")   # 나중에 해결됐는지 확인하는 사유
 END_TOTAL_MIN_RATIO = 0.9           # 끝 시점 총 건수가 시작의 90% 미만이면 비정상 값으로 보고 무시
 
+# (2026-10-24) 건수 부족 허용 오차. 크롤링은 몇 시간 걸리는 동안 목록이 실시간으로 바뀐다(마감된 물건이 빠지고 새 물건이
+# 들어오면 시작/끝 총 건수가 같아도 페이지 경계의 1~2건이 건너뛰어진다). 실제 사례: 금요일 경매 6,570건 중 6,568건,
+# 토요일 공매 2,514건 중 2,513건 - 둘 다 추출 실패 0건이었는데 "스캔 건수 부족"으로 실행이 실패 처리되고 임시 배치 탭이
+# 지워지지 않았다. 추출 실패(미해결)가 0이고 부족분이 아래 허용 오차 이내면 경고만 남기고 정상으로 본다.
+COUNT_SHORTFALL_ABS = 3             # 최소 허용 건수
+COUNT_SHORTFALL_RATIO = 0.001       # 기준 건수의 0.1% (둘 중 큰 값)
+
+
+def count_shortfall_tolerance(expected):
+    return max(COUNT_SHORTFALL_ABS, int((expected or 0) * COUNT_SHORTFALL_RATIO))
+
+
+def judge_count_shortfall(label, expected, scanned, unresolved, rows_final):
+    """사이트 총 건수(expected)와 실제 스캔한 물건(tid) 수 / 저장 행 수를 비교한다. -> (실패 사유 리스트, 경고 리스트).
+    추출 실패 후 미해결 tid 가 있으면 허용 오차를 적용하지 않는다(실제로 놓친 물건이 있다는 뜻이므로)."""
+    fails, warns = [], []
+    tol = count_shortfall_tolerance(expected) if unresolved == 0 else 0
+    short = expected - scanned
+    if short > tol:
+        fails.append(f"{label} 스캔 건수 부족(기준 {expected:,} / 실제 {scanned:,} / 추출실패 미해결 {unresolved:,})")
+    elif short > 0:
+        warns.append(f"{label} 스캔 {short}건 부족(허용 {tol}건 이내, 목록 변동으로 추정 / 추출실패 미해결 0)")
+    if expected - rows_final > tol:
+        fails.append(f"{label} 저장 행수 부족(기준 {expected:,} / 저장 {rows_final:,})")
+    return fails, warns
+
 RUN_STATS = {}
 RUN_ISSUES = []
 FAILED_TIDS = {"A": set(), "B": set()}
@@ -2747,6 +2773,10 @@ def main():
     pa_end_total = 0
     pa_end_missing = False
     pa_expected_effective = 0
+    # (2026-10-24) 같은 물건이 두 자산구분 목록에 동시에 나오면 "자산구분별 총 건수의 합"이 고유 물건 수보다 커져서
+    # 누락이 없어도 스캔 건수 부족으로 보인다. 자산구분별로 본 tid 를 기록해 겹친 개수를 기대 건수에서 뺀다.
+    pa_tid_categories = {}      # tid -> 그 tid 가 나타난 자산구분 이름 집합
+    pa_expected_unique = 0      # 비교 기준(pa_expected_effective)에서 자산구분 간 중복을 뺀 값
     ca_recollect_attempt = 0
     pa_recollect_attempt = 0
     deadline_hit = False
@@ -2966,6 +2996,7 @@ def main():
                         apply_filters_pa(driver, apsl_amt_end_value, prptdvsn_value)
                         wait_for_list(driver)
                         category_total = get_total_count(driver)
+                        cat_seen_tids = set()   # 이 자산구분 목록에서 이번 회차에 본 tid(이미 처리한 것 포함)
                         if category_total is not None:
                             pa_expected_total += category_total
                             print(f"[검증] 사이트 기준 [{TYPE_B_LABEL}/{prptdvsn_label}] 총 "
@@ -2997,6 +3028,9 @@ def main():
                                 cur_case = ""
                                 try:
                                     tid = row.get_attribute("data-tid")
+                                    if tid:
+                                        cat_seen_tids.add(tid)
+                                        pa_tid_categories.setdefault(tid, set()).add(prptdvsn_label)
                                     if tid in seen_tids_pa:
                                         continue
                                     seen_tids_pa.add(tid)
@@ -3112,6 +3146,11 @@ def main():
                             pa_end_missing = True
                         else:
                             pa_end_total += cat_end_total
+                        # 자산구분별 집계 로그: 어느 구분에서 건수가 어긋나는지 바로 보인다
+                        if category_total is not None:
+                            _diff = category_total - len(cat_seen_tids)
+                            print(f"[집계/{TYPE_B_LABEL}/{prptdvsn_label}] 사이트 {category_total:,}건 / 이번 회차에 본 물건 "
+                                  f"{len(cat_seen_tids):,}건" + (f" (차이 {_diff:+,}건)" if _diff else ""))
 
                     except Exception as e:
                         print(f"[{TYPE_B_LABEL}/{prptdvsn_label}] 이 카테고리 처리 중 오류가 발생해 건너뜁니다: {e}")
@@ -3129,18 +3168,24 @@ def main():
                 else:
                     pa_expected_effective = pa_expected_total
 
+                pa_cross_dup = sum(len(c) - 1 for c in pa_tid_categories.values() if len(c) > 1)
+                pa_expected_unique = max(0, pa_expected_effective - pa_cross_dup)
+                if pa_cross_dup:
+                    print(f"[검증] {TYPE_B_LABEL} 두 자산구분 이상에 동시에 나온 물건 {pa_cross_dup}건 - 자산구분별 건수의 합에서 "
+                          f"중복을 빼 고유 물건 기준 {pa_expected_unique:,}건으로 비교합니다.")
+
                 if pa_all_categories_ok:
                     pa_scan_complete = True
 
             if pa_expected_total <= 0 or pa_count_missing or \
-                    len(seen_tids_pa) >= pa_expected_effective:
+                    len(seen_tids_pa) >= pa_expected_unique:
                 break
             if pa_recollect_attempt >= MAX_RECOLLECT_ATTEMPTS:
                 print(f"[검증] ⚠️ {TYPE_B_LABEL} 재시도 한도({MAX_RECOLLECT_ATTEMPTS}회)에 도달해 "
                       f"더 이상 재시도하지 않고 지금까지 수집된 내용으로 진행합니다.")
                 break
             print(f"\n[검증] {TYPE_B_LABEL} 스캔 건수({len(seen_tids_pa):,})가 사이트 총 "
-                  f"건수({pa_expected_effective:,})보다 적어, 놓친 물건을 찾기 위해 목록을 처음부터 "
+                  f"건수({pa_expected_unique:,})보다 적어, 놓친 물건을 찾기 위해 목록을 처음부터 "
                   f"다시 훑습니다 ({pa_recollect_attempt}/{MAX_RECOLLECT_ATTEMPTS}회차 재시도)...")
 
     except KeyboardInterrupt:
@@ -3168,6 +3213,7 @@ def main():
         # False)는 애초에 사이트 총 건수와 비교할 수 없으므로(아직 다 안 봤으니까)
         # 그 종류는 비교 자체를 건너뛴다.
         count_check_notes = []
+        count_warn_notes = []   # 허용 범위 이내의 차이(실패로 보지 않음)
         count_check_ok = True
 
         def _count_rows_by_type(local_sheet, type_label):
@@ -3190,20 +3236,16 @@ def main():
                   f"{format(ca_end_total, ',') if ca_end_total is not None else '확인불가'} "
                   f"(비교 기준 {ca_expected_check:,}) / 실제 스캔한 물건(tid) 수: {ca_unique_scanned:,} / "
                   f"최종 저장된 행 수: {ca_rows_final:,} / 추출 실패 후 미해결 tid: {ca_unresolved:,}건")
-            if ca_unique_scanned < ca_expected_check:
+            _fails, _warns = judge_count_shortfall(
+                TYPE_A_LABEL, ca_expected_check, ca_unique_scanned, ca_unresolved, ca_rows_final)
+            if _fails:
                 count_check_ok = False
-                count_check_notes.append(
-                    f"{TYPE_A_LABEL} 스캔 건수 부족(기준 {ca_expected_check:,} / 실제 {ca_unique_scanned:,}"
-                    f" / 추출실패 미해결 {ca_unresolved:,})"
-                )
-            if ca_rows_final < ca_expected_check:
-                count_check_ok = False
-                count_check_notes.append(
-                    f"{TYPE_A_LABEL} 저장 행수 부족(기준 {ca_expected_check:,} / 저장 {ca_rows_final:,})"
-                )
+                count_check_notes.extend(_fails)
+            count_warn_notes.extend(_warns)
 
         if pa_scan_complete and not pa_count_missing and pa_expected_total > 0:
-            pa_expected_check = pa_expected_effective if pa_expected_effective > 0 else pa_expected_total
+            pa_expected_check = pa_expected_unique if pa_expected_unique > 0 else (
+                pa_expected_effective if pa_expected_effective > 0 else pa_expected_total)
             pa_unique_scanned = len(seen_tids_pa)
             pa_rows_final = _count_rows_by_type(sheet, TYPE_B_LABEL)
             pa_unresolved = len(FAILED_TIDS["B"] - seen_tids_pa)
@@ -3211,20 +3253,19 @@ def main():
                   f"{format(pa_end_total, ',') if not pa_end_missing else '확인불가'} "
                   f"(비교 기준 {pa_expected_check:,}) / 실제 스캔한 물건(tid) 수: {pa_unique_scanned:,} / "
                   f"최종 저장된 행 수: {pa_rows_final:,} / 추출 실패 후 미해결 tid: {pa_unresolved:,}건")
-            if pa_unique_scanned < pa_expected_check:
+            _fails, _warns = judge_count_shortfall(
+                TYPE_B_LABEL, pa_expected_check, pa_unique_scanned, pa_unresolved, pa_rows_final)
+            if _fails:
                 count_check_ok = False
-                count_check_notes.append(
-                    f"{TYPE_B_LABEL} 스캔 건수 부족(기준 {pa_expected_check:,} / 실제 {pa_unique_scanned:,}"
-                    f" / 추출실패 미해결 {pa_unresolved:,})"
-                )
-            if pa_rows_final < pa_expected_check:
-                count_check_ok = False
-                count_check_notes.append(
-                    f"{TYPE_B_LABEL} 저장 행수 부족(기준 {pa_expected_check:,} / 저장 {pa_rows_final:,})"
-                )
+                count_check_notes.extend(_fails)
+            count_warn_notes.extend(_warns)
 
+        if count_warn_notes:
+            print("[건수검증] ℹ️ 허용 범위 안의 차이(정상 처리): " + " / ".join(count_warn_notes))
         if count_check_notes:
             print("[건수검증] ⚠️ 문제 발견: " + " / ".join(count_check_notes))
+        elif count_warn_notes:
+            print("[건수검증] ✅ 허용 범위 안의 차이만 있어 정상으로 봅니다.")
         elif ca_expected_total is not None or (pa_expected_total > 0 and not pa_count_missing):
             print("[건수검증] ✅ 사이트 총 건수와 비교했을 때 누락 없이 정상적으로 수집됐습니다.")
 
@@ -3260,6 +3301,7 @@ def main():
             print(f"[진단로그] 진단 통계 계산 실패(치명적이지 않음): {e}")
 
         verification_result = ""  # GOOGLE_SHEETS_ENABLED가 False인 경우에도 아래에서 안전하게 참조 가능하도록 기본값 설정
+        merge_result = ""         # 시트 합치기 자체의 결과(건수검증 문구가 붙기 전). 임시 탭 정리와 실행 실패 판정에 쓴다
         if GOOGLE_SHEETS_ENABLED and current_week_ws is not None:
             sync_ok, remote_before_final, remote_after_final = sync_to_google_sheet(sheet, current_week_ws)
 
@@ -3277,12 +3319,17 @@ def main():
             else:
                 verification_result = f"불일치(예상{expected_rows}/실제{remote_after_final})"
 
+            merge_result = verification_result
             if not count_check_ok:
                 verification_result += " / 건수검증실패: " + "; ".join(count_check_notes)
+            if count_warn_notes:
+                verification_result += " / 건수 경고(허용범위): " + "; ".join(count_warn_notes)
             if incomplete_notes:
                 verification_result += " / 미완료: " + "; ".join(incomplete_notes)
 
             # --- 임시 배치 탭 정리 ---
+            # (2026-10-24) 판단 기준은 "시트 합치기 결과(merge_result)"뿐이다. 예전에는 건수검증 문구가 붙은
+            # verification_result 로 판단해서, 합치기가 정확했는데도 건수가 1건 모자라면 임시 탭이 남았다.
             # 최종 병합이 "OK"(예상한 그대로 정확히 반영됨)일 때만 이번 실행의
             # 임시 배치 탭을 지운다. 그 외의 경우(저장실패/확인불가/불일치/건너뜀)는
             # 혹시 몰라 지우지 않고 그대로 남겨둔다 - 공유 탭에 확실히 반영됐다는
@@ -3291,14 +3338,14 @@ def main():
             # 확인해서 수동으로 병합하거나, cleanup_orphaned_batch_tabs()가 12시간
             # 뒤 자동으로 정리해준다(그 사이에 원인을 조사할 시간을 벌어준다).
             if batch_ws is not None:
-                if verification_result == "OK":
+                if merge_result == "OK":
                     try:
                         google_sh.del_worksheet(batch_ws)
                         print(f"[구글시트] 임시 배치 탭을 정리했습니다 (공유 탭에 안전하게 반영 완료됨).")
                     except Exception as e:
                         print(f"[구글시트] 임시 배치 탭 삭제에 실패했습니다(치명적이지 않음): {e}")
                 else:
-                    print(f"[구글시트] 검증 결과가 '{verification_result}'라 임시 배치 탭을 "
+                    print(f"[구글시트] 시트 합치기 결과가 '{merge_result}'라 임시 배치 탭을 "
                           f"그대로 보존합니다({batch_tab_name}) - 데이터가 유실되지 않았으니 "
                           f"필요하면 직접 확인해주세요.")
 
@@ -3366,9 +3413,11 @@ def main():
         # 가능성이 있으면) 일부러 0이 아닌 종료 코드로 끝내서 GitHub이 이 실행을
         # "실패(빨간 X)"로 표시하게 만든다 - 저장소 Settings에서 실패 알림 이메일을
         # 켜두셨다면(권장) 사람이 직접 로그를 열어보지 않아도 즉시 알 수 있다.
+        # (2026-10-24) 허용 범위 이내의 건수 차이(count_warn_notes)는 실패가 아니다. 실패 조건은 세 가지:
+        # 시트 합치기가 안전하지 않음 / 건수검증 실패(미해결 있음 또는 허용 오차 초과) / 수집 미완료.
         safe_results = {"OK", "건너뜀(원격이 이미 더 많음, 안전)", ""}
         if GOOGLE_SHEETS_ENABLED and current_week_ws is not None and \
-                verification_result not in safe_results:
+                (merge_result not in safe_results or not count_check_ok or incomplete_notes):
             print(f"\n[종료 코드] 검증 결과가 '{verification_result}'로 안전하지 않아 "
                   f"이번 실행을 실패로 표시합니다 (GitHub Actions에서 실패 알림이 발송되도록). "
                   f"실제 데이터는 유실되지 않았을 수 있으나, 반드시 로그를 확인해주세요.")
