@@ -24,7 +24,7 @@ from typing import Callable, List, Optional, Union
 
 import requests
 
-from . import jose_extractor
+from . import http_fetch, jose_extractor
 from .ai_extract import AI_DOC
 from .run_log import LOG
 from .sqlite_store import post_key
@@ -139,18 +139,22 @@ def download_jose_rows(session, adapter, attachments, title, crawled_at, city: C
 
 
 def _download(session, adapter, att, referer):
-    """첨부 1개를 메모리로 받는다. referer 가 있으면 Referer 헤더를 붙여 GET 한다."""
-    if referer:
-        resp = session.get(att["url"], headers={**adapter.HEADERS, "Referer": referer}, timeout=30)
+    """첨부 1개를 메모리로 받는다. referer 가 있으면 Referer 헤더를 붙여 GET 한다.
+    일시 오류(400/5xx/시간초과)는 http_fetch.retry_call 로 최대 3번까지 다시 받는다(2026-10-25: 영천시·안동시 400, 합천군 ReadTimeout)."""
+    def once():
+        if referer:
+            resp = session.get(att["url"], headers={**adapter.HEADERS, "Referer": referer}, timeout=60)
+            resp.raise_for_status()
+            return resp.content
+        if hasattr(adapter, "download_attachment"):
+            # 일부 시스템은 GET으로 바로 못 받고 POST 등 별도 절차가 필요하다
+            # (예: ntis_ofr — 첨부파일 다운로드 자체가 POST 폼 제출).
+            return adapter.download_attachment(session, att)
+        resp = session.get(att["url"], headers=adapter.HEADERS, timeout=60)
         resp.raise_for_status()
-        return resp.content
-    if hasattr(adapter, "download_attachment"):
-        # 일부 시스템은 GET으로 바로 못 받고 POST 등 별도 절차가 필요하다
-        # (예: ntis_ofr — 첨부파일 다운로드 자체가 POST 폼 제출).
-        return adapter.download_attachment(session, att)
-    resp = session.get(att["url"], headers=adapter.HEADERS, timeout=30)
-    resp.raise_for_status()
-    return resp.content  # 메모리에만 보관, 파일로 저장하지 않음
+        return resp.content  # 메모리에만 보관, 파일로 저장하지 않음
+
+    return http_fetch.retry_call(once)
 
 
 def write_outputs(city_dir: Path, records: list, jose_rows: list):
@@ -205,7 +209,7 @@ def run_city(city: City, days: int, output_dir: Path, dry_run: bool, delay: floa
     today = dt.date.today()
     cutoff = today - dt.timedelta(days=days - 1)
     crawled_at = dt.datetime.now(dt.timezone.utc).isoformat()
-    session = requests.Session()
+    session = http_fetch.install(requests.Session())  # 중간 인증서를 빠뜨린 사이트(곡성군 등)용 CA 보완
     if hasattr(adapter, "prepare_session"):
         adapter.prepare_session(session, city)
 

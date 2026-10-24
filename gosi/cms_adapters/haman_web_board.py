@@ -13,6 +13,8 @@ list1f1t3i1 스킨) 어댑터.
 <span class="t3">등록일 : YYYY-MM-DD</span>...</i></a>. id 파라미터 이름은 함안군·거제·
 창녕·하동·진주·김해·합천·남해·통영은 not_ancmt_mgt_no=, 사천·삼척은 mgtNo=로 갈린다
 (실측 확인, 2026-09-28) — 그래서 공통으로 항상 붙는 "amode=view"로 항목을 찾는다.
+남해군은 2026-10에 링크가 "?amode=_view&not_ancmt_mgt_no=..." 로 바뀌어(밑줄) 목록이 0건으로 읽혔다(2026-10-25 실측) -
+그래서 "amode=_view"도 같이 찾는다(_VIEW_HREF_RE).
 
 사천·삼척은 span.t3에 "등록일 : " 라벨 없이 날짜 하나만 담겨 있고(예: "2026-09-23"),
 고시번호도 span.t3가 아니라 제목 앞에 "[사천시 공고 제2026-1506호]"처럼 대괄호로
@@ -37,6 +39,7 @@ HEADERS = {
     )
 }
 
+_VIEW_HREF_RE = re.compile(r"amode=_?view")
 _DATE_RE = re.compile(r"등록일\s*:\s*(\d{4}-\d{1,2}-\d{1,2})")
 _PLAIN_DATE_RE = re.compile(r"^(\d{4}-\d{1,2}-\d{1,2})$")
 _NOTICE_NO_RE = re.compile(r"(공고|고시)\s*제\s*\d{4}\s*[-–]\s*\d+\s*호")
@@ -49,7 +52,7 @@ def fetch_list_page(session, base_url, board, page_index, page_unit=10):
     soup = BeautifulSoup(resp.text, "html.parser")
     rows = []
     for li in soup.select("ul.lst1 > li.li1"):
-        a_tag = li.find("a", href=re.compile(r"amode=view"))
+        a_tag = li.find("a", href=_VIEW_HREF_RE)
         if a_tag is None:
             continue
         title_el = a_tag.select_one("strong.t1")
