@@ -123,5 +123,30 @@ class PcName(unittest.TestCase):
         self.assertEqual(R.ensure_pc_name(interactive=False), "")
 
 
+class RunLog(unittest.TestCase):
+    def test_append_recent_and_summary(self):
+        from core import pc_runlog
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "sub" / "pc_runs.jsonl"
+            self.assertEqual(pc_runlog.recent(f), [])
+            rec = pc_runlog.new_record("PCwj", "v1")
+            rec["regions"] = {"경남": {"status": "ok", "minutes": 3.0}, "전남": {"status": "timeout", "minutes": 30.0}}
+            rec["stage"], rec["result"] = "push", "ok"
+            pc_runlog.append(f, rec)
+            pc_runlog.append(f, dict(rec, pc="PCyw"))
+            got = pc_runlog.recent(f, 5)
+            self.assertEqual([r["pc"] for r in got], ["PCwj", "PCyw"])
+            self.assertIn("ended", got[0])
+            self.assertIn("문제 지역: 전남", pc_runlog.summary(got[0]))
+
+    def test_main_leaves_local_record_when_stopped(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(local_dir, "local_dir", return_value=Path(d)),                  mock.patch.object(local_dir, "pc_name", return_value="PCwj"),                  mock.patch.object(R, "preflight", return_value=False),                  mock.patch("core.pnu.load_key", return_value="k"),                  mock.patch.object(R.pc_runlog, "recent", return_value=[]),                  mock.patch.object(R.os.path, "isdir", return_value=True):
+                self.assertEqual(R.main(use_git=True), 1)
+            lines = (Path(d) / "pc_runs_local.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertIn("preflight", lines[0])
+
+
 if __name__ == "__main__":
     unittest.main()

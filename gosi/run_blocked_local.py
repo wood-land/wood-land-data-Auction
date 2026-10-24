@@ -22,12 +22,15 @@ PC 가 두 대(PCwj, PCyw)이고 서로 다른 시간에 도는 것이 전제다
 import os
 import subprocess
 import sys
+import time
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from core import blocked_sites as B  # noqa: E402
 from core import local_dir  # noqa: E402
+from core import pc_runlog  # noqa: E402
 from core.paths import DB_REPO_DIR, DATA_DIR  # noqa: E402
 
 DATA = str(DB_REPO_DIR)  # 비공개 DB 저장소(별도 git 저장소, 여러 크롤러 공용; 위치는 core/paths.py). 이 크롤러의 DB 는 그 안의 gosi/
@@ -35,6 +38,7 @@ DB_SUBDIR = "gosi"
 
 VERSION = "v20261025"  # 배치 파일 이름의 버전과 맞춘다(이 스크립트를 고치면 둘 다 새 날짜로)
 REGION_TIMEOUT = 30 * 60  # 지역 하나가 이 시간(초)을 넘기면 중단하고 다음으로 넘어간다(한 게시판이 오래 걸려도 전체가 멈추지 않게)
+RUNS_FILE = Path(DATA) / DB_SUBDIR / "pc_runs.jsonl"  # 실행 기록(DB 저장소, 모든 PC 가 공유)
 DB_REPO_URL = "https://github.com/wood-land/wood-land-data-db.git"
 
 
@@ -125,15 +129,21 @@ def ensure_pc_name(ask=input, interactive=None):
     return ""
 
 
-def main(use_git=True):
+def _main(use_git, rec):
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     print(f"===== 막힌 지자체 PC 수집 {VERSION} =====")
     pc = ensure_pc_name()
     if not pc:
+        rec["result"] = "stopped: no pc name"
         return 2
+    rec["pc"] = pc
     print(f"이 PC: {pc}  (수집 로그 시트 탭 이름 앞에 '{pc}' 가 붙습니다)")
+    for old in pc_runlog.recent(RUNS_FILE, 3):
+        print("  지난 기록: " + pc_runlog.summary(old))
     from core.pnu import load_key
+    rec["stage"] = "check"
     if not load_key():
+        rec["result"] = "stopped: no kakao key"
         print("\n[오류] 카카오 REST 키를 찾지 못했습니다. 주소를 PNU 로 바꿀 수 없어 수집을 시작하지 않습니다.\n"
               "  - 환경변수 KAKAO_REST_API_KEY 에 키를 넣거나,\n"
               "  - 500_local 아래 이름에 'kakao'(또는 '카카오')가 들어간 폴더에 키가 든 파일(.txt)을 두세요(git 에는 올리지 않습니다).")
@@ -143,45 +153,81 @@ def main(use_git=True):
               f"  git clone {DB_REPO_URL} \"{DATA}\"")
         return 2
     if not preflight(use_git):
+        rec["result"] = "stopped: preflight (conflict or unpushed commits)"
         return 1
     if use_git:
         print("[1/4] 최신 코드·DB 받기")
+        rec["stage"] = "pull"
         if run(["git", "pull", "--rebase", "--autostash"]) != 0 or run(["git", "pull", "--rebase", "--autostash"], DATA) != 0:
             print("\n[중단] git pull 에 실패했습니다. 위 메시지를 확인하세요(충돌이나 네트워크 문제). 아무것도 올리지 않았습니다.")
+            rec["result"] = "stopped: git pull failed"
             return 1
+        rec["heads"] = {"code": _git_out(["rev-parse", "--short", "HEAD"], HERE)[1],
+                        "db": _git_out(["rev-parse", "--short", "HEAD"], DATA)[1]}
 
+    rec["stage"] = "detect"
     print("\n[2/4] 수집 로그(구글시트)에서 새로 막힌 지자체 찾기")
     try:
         import detect_blocked
         detect_blocked.run(apply=True, confirm=detect_blocked.ask_console)  # 후보는 물어보고 승인(y)해야 등록한다
     except Exception as e:  # 키가 없거나 시트를 못 읽어도 수집은 계속한다
         print(f"(건너뜀) {type(e).__name__}: {str(e)[:120]}")
+        rec["notes"].append(f"detect_blocked skipped: {type(e).__name__}")
     blocked = B.all_blocked()
     print("대상: " + " / ".join(f"{r}({', '.join(c)})" for r, c in blocked.items()))
 
     print("\n[3/4] 국내 IP 에서만 읽히는 게시판 수집")
+    rec["stage"] = "collect"
+    rec["targets"] = {r: list(c) for r, c in blocked.items()}
     db_files = []
     for region in blocked:
+        t0 = time.time()
+        status = "ok"
         name = f"국내IP_{region}.sqlite"
         try:
             rc = subprocess.run([sys.executable, "-u", "run_scheduled.py", "--region", region, "--blocked", "only",
                                  "--db", str(DATA_DIR / name), "--log-prefix", pc],
                                 cwd=HERE, env=env, timeout=REGION_TIMEOUT).returncode
             print(f"  -> {region}: {'완료' if rc == 0 else f'오류 종료(코드 {rc})'}")
+            status = "ok" if rc == 0 else f"exit {rc}"
         except subprocess.TimeoutExpired:
             print(f"  -> {region}: {REGION_TIMEOUT // 60}분을 넘겨 중단했습니다(그때까지 저장된 결과만 남습니다).")
+            status = "timeout"
+        rec["regions"][region] = {"status": status, "minutes": round((time.time() - t0) / 60, 1)}
         db_files.append(f"{DB_SUBDIR}/{name}")
 
     code_files = [os.path.relpath(str(f), HERE) for f in (B.AUTO_FILE, B.REJECTED_FILE) if f.exists()]
     # 등록 목록이 바뀌었으면 함께 올려야 Actions 가 그 지자체를 건너뛴다(거절 기록도 공유)
     if not use_git:
+        rec["result"] = "collected (no-git)"
         print("\n--no-git: 결과 파일만 만들고 git 에는 올리지 않았습니다: " + ", ".join(db_files + code_files))
         return 0
 
     print("\n[4/4] 결과 올리기")
+    rec["stage"] = "push"
+    rec["result"] = "collected"  # 이 줄이 DB 저장소에 올라간다. push 성공 여부는 이 PC 의 로컬 기록에 남는다
+    pc_runlog.append(RUNS_FILE, rec)
+    db_files.append(f"{DB_SUBDIR}/{RUNS_FILE.name}")
     ok_db = commit_push(DATA, db_files, f"chore: 국내 IP 로컬 수집 결과 갱신 (막힌 게시판) [{pc}]", "DB 저장소")
     ok_code = commit_push(HERE, code_files, f"chore: 막힌 지자체 목록 갱신 (자동 등록/거절) [{pc}]", "코드 저장소") if code_files else True
+    rec["result"] = "ok" if ok_db and ok_code else "push failed"
     return 0 if ok_db and ok_code else 1
+
+
+def main(use_git=True):
+    rec = pc_runlog.new_record(local_dir.pc_name(), VERSION)
+    try:
+        return _main(use_git, rec)
+    except BaseException as e:  # 어디서 죽었는지 남긴다
+        rec["result"] = f"crashed: {type(e).__name__}: {str(e)[:150]}"
+        raise
+    finally:
+        try:
+            base = local_dir.local_dir()
+            if base:
+                pc_runlog.append(Path(base) / "pc_runs_local.jsonl", rec)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
