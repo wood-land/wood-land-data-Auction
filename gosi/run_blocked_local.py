@@ -14,6 +14,10 @@ GitHub 호스티드 러너(미국 IP)에서는 core/blocked_sites.py 의 게시�
 
   python run_blocked_local.py            # 받기 -> 수집 -> 올리기
   python run_blocked_local.py --no-git   # 시험용: 수집만 하고 git 은 건드리지 않는다
+
+PC 가 두 대(PCwj, PCyw)이고 서로 다른 시간에 도는 것이 전제다(동시에 돌지 않는다). 그래서 PC 별 DB 파일 분리는 필요 없고, 같은 국내IP_*.sqlite 를
+순서대로 받고(pull) 수집하고 올린다(push). 시작 전 점검(preflight)이 '못 올린 커밋'·'충돌로 멈춘 상태'를 걸러낸다. PC 이름은
+500_local/pc_name.txt(한 줄, git 제외)나 환경변수 GOSI_PC_NAME 이며, 없으면 처음 한 번 물어본다.
 """
 import os
 import subprocess
@@ -23,12 +27,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from core import blocked_sites as B  # noqa: E402
+from core import local_dir  # noqa: E402
 from core.paths import DB_REPO_DIR, DATA_DIR  # noqa: E402
 
 DATA = str(DB_REPO_DIR)  # 비공개 DB 저장소(별도 git 저장소, 여러 크롤러 공용; 위치는 core/paths.py). 이 크롤러의 DB 는 그 안의 gosi/
 DB_SUBDIR = "gosi"
 
-VERSION = "v20261018"  # 배치 파일 이름의 버전과 맞춘다(이 스크립트를 고치면 둘 다 새 날짜로)
+VERSION = "v20261025"  # 배치 파일 이름의 버전과 맞춘다(이 스크립트를 고치면 둘 다 새 날짜로)
 REGION_TIMEOUT = 30 * 60  # 지역 하나가 이 시간(초)을 넘기면 중단하고 다음으로 넘어간다(한 게시판이 오래 걸려도 전체가 멈추지 않게)
 DB_REPO_URL = "https://github.com/wood-land/wood-land-data-db.git"
 
@@ -53,15 +58,80 @@ def commit_push(cwd, paths, message, label):
         if run(["git", "pull", "--rebase", "--autostash"], cwd) == 0 and run(["git", "push"], cwd) == 0:
             print(f"\n[{label}] 올리기 완료(재시도).")
             return True
-        print(f"\n[주의] [{label}] 올리기에 실패했습니다. 결과는 이 PC 에 커밋돼 있으니 다음 실행 때 다시 올라갑니다.")
+        print(f"\n[주의] [{label}] 올리기에 실패했습니다. 결과는 이 PC 에만 커밋돼 있습니다 - 다른 PC 가 돌기 전에 다시 실행해(시작할 때 먼저 올립니다) 올려 두세요.")
         return False
     print(f"\n[{label}] 올리기 완료.")
     return True
 
 
+def _git_out(args, cwd):
+    p = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return p.returncode, (p.stdout or "").strip()
+
+
+def git_problems(cwd, git=_git_out, exists=os.path.exists):
+    """cwd 저장소가 '다음 수집을 시작해도 되는 상태'인지 확인한다. -> (막힌 이유 리스트, 아직 못 올린 커밋 수).
+    PC 가 두 대(집·회사)이고 서로 다른 시간에 도는 것이 전제라, 위험은 '한 PC 의 push 실패로 결과가 그 PC 에만 남은 채 다른 PC 가 옛 DB 로
+    이어서 수집하는 것'과 'pull 중 충돌이 난 채로 남은 상태' 뿐이다. 둘 다 시작 전에 걸러낸다."""
+    stuck = []
+    for name in ("rebase-merge", "rebase-apply", "MERGE_HEAD"):
+        rc, path = git(["rev-parse", "--git-path", name], cwd)
+        if rc == 0 and path and exists(path if os.path.isabs(path) else os.path.join(cwd, path)):
+            stuck.append(f"git 이 '{name}' 상태로 멈춰 있습니다(이전 pull/합치기가 끝나지 않음)")
+    rc, out = git(["diff", "--name-only", "--diff-filter=U"], cwd)
+    if rc == 0 and out:
+        stuck.append("충돌이 풀리지 않은 파일이 있습니다: " + ", ".join(out.splitlines()[:5]))
+    rc, out = git(["rev-list", "--count", "@{u}..HEAD"], cwd)
+    unpushed = int(out) if rc == 0 and out.isdigit() else 0
+    return stuck, unpushed
+
+
+def preflight(use_git, git=_git_out, push=None):
+    """수집을 시작하기 전 점검. 문제가 있으면 안내를 출력하고 False(수집하지 않음). 못 올린 커밋은 먼저 올려 본다."""
+    if not use_git:
+        return True
+    push = push or (lambda cwd: run(["git", "push"], cwd) == 0)
+    for label, cwd in (("코드 저장소", HERE), ("DB 저장소", DATA)):
+        stuck, unpushed = git_problems(cwd, git)
+        if stuck:
+            print(f"\n[중단] {label}({cwd}) 상태가 이상합니다. 수집하지 않고 끝냅니다:")
+            for s in stuck:
+                print("  - " + s)
+            print("  해결: 그 폴더에서 `git status` 를 보고 충돌을 푼 뒤(또는 `git rebase --abort`) 다시 실행하세요.")
+            return False
+        if unpushed:
+            print(f"\n[알림] {label}에 아직 올리지 못한 커밋 {unpushed}개가 있습니다(이전 실행의 push 실패). 먼저 올립니다.")
+            if not push(cwd):
+                print(f"[중단] 올리지 못했습니다. 그대로 수집하면 다른 PC 와 DB 가 갈라집니다. 네트워크·권한을 확인하고 다시 실행하세요.")
+                return False
+    return True
+
+
+def ensure_pc_name(ask=input, interactive=None):
+    """이 PC 이름(PCwj / PCyw 등)을 돌려준다. 없으면 콘솔에서 한 번 물어 500_local/pc_name.txt 에 저장한다. 끝내 못 정하면 ''."""
+    name = local_dir.pc_name()
+    if name:
+        return name
+    if interactive is None:
+        interactive = bool(sys.stdin) and sys.stdin.isatty()
+    if not interactive:
+        print("\n[오류] 이 PC 의 이름을 모릅니다. 환경변수 GOSI_PC_NAME 을 넣거나 500_local/pc_name.txt 에 한 줄로 적으세요(예: PCwj).")
+        return ""
+    ans = ask("\n이 PC 의 이름을 입력하세요 (영문·숫자·한글 2~20자, 예: PCwj 또는 PCyw): ").strip()
+    if local_dir.save_pc_name(ans):
+        print(f"저장했습니다: 500_local/pc_name.txt = {ans}  (이 PC 에서는 다음부터 묻지 않습니다)")
+        return ans
+    print("[오류] 이름 형식이 맞지 않거나 500_local 폴더를 찾지 못해 저장하지 못했습니다.")
+    return ""
+
+
 def main(use_git=True):
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     print(f"===== 막힌 지자체 PC 수집 {VERSION} =====")
+    pc = ensure_pc_name()
+    if not pc:
+        return 2
+    print(f"이 PC: {pc}  (수집 로그 시트 탭 이름 앞에 '{pc}' 가 붙습니다)")
     from core.pnu import load_key
     if not load_key():
         print("\n[오류] 카카오 REST 키를 찾지 못했습니다. 주소를 PNU 로 바꿀 수 없어 수집을 시작하지 않습니다.\n"
@@ -72,6 +142,8 @@ def main(use_git=True):
         print("\n[오류] data/ 폴더가 비공개 DB 저장소가 아닙니다. 아래 명령으로 받아 두세요(한 번만):\n"
               f"  git clone {DB_REPO_URL} \"{DATA}\"")
         return 2
+    if not preflight(use_git):
+        return 1
     if use_git:
         print("[1/4] 최신 코드·DB 받기")
         if run(["git", "pull", "--rebase", "--autostash"]) != 0 or run(["git", "pull", "--rebase", "--autostash"], DATA) != 0:
@@ -93,7 +165,7 @@ def main(use_git=True):
         name = f"국내IP_{region}.sqlite"
         try:
             rc = subprocess.run([sys.executable, "-u", "run_scheduled.py", "--region", region, "--blocked", "only",
-                                 "--db", str(DATA_DIR / name), "--log-prefix", "PC"],
+                                 "--db", str(DATA_DIR / name), "--log-prefix", pc],
                                 cwd=HERE, env=env, timeout=REGION_TIMEOUT).returncode
             print(f"  -> {region}: {'완료' if rc == 0 else f'오류 종료(코드 {rc})'}")
         except subprocess.TimeoutExpired:
@@ -107,8 +179,8 @@ def main(use_git=True):
         return 0
 
     print("\n[4/4] 결과 올리기")
-    ok_db = commit_push(DATA, db_files, "chore: 국내 IP 로컬 수집 결과 갱신 (막힌 게시판)", "DB 저장소")
-    ok_code = commit_push(HERE, code_files, "chore: 막힌 지자체 목록 갱신 (자동 등록/거절)", "코드 저장소") if code_files else True
+    ok_db = commit_push(DATA, db_files, f"chore: 국내 IP 로컬 수집 결과 갱신 (막힌 게시판) [{pc}]", "DB 저장소")
+    ok_code = commit_push(HERE, code_files, f"chore: 막힌 지자체 목록 갱신 (자동 등록/거절) [{pc}]", "코드 저장소") if code_files else True
     return 0 if ok_db and ok_code else 1
 
 

@@ -62,6 +62,34 @@ def find_file(folder_pattern, file_name):
     return local_path("_none_", file_name)  # 없는 경로(.exists() False)
 
 
+PC_NAME_RE = re.compile(r"^[A-Za-z0-9가-힣_-]{2,20}$")  # 시트 탭 이름·커밋 메시지에 그대로 쓰므로 공백·특수문자는 막는다
+
+
+def pc_name():
+    """이 PC 의 이름(예: PCwj, PCyw). 환경변수 GOSI_PC_NAME -> 500_local/pc_name.txt 한 줄. 없거나 형식이 틀리면 ''.
+    수집 로그 시트 탭 이름('PCwj경북_문서처리')과 커밋 메시지에 붙여, 어느 PC 가 돌렸는지 구별한다(2026-10-25 사용자 지정: PCwj, PCyw)."""
+    name = os.environ.get("GOSI_PC_NAME", "").strip()
+    if not name:
+        try:
+            f = local_path("pc_name.txt")
+            name = f.read_text(encoding="utf-8").strip() if f.is_file() else ""
+        except OSError:
+            name = ""
+    return name if PC_NAME_RE.match(name) else ""
+
+
+def save_pc_name(name):
+    """500_local/pc_name.txt 에 이 PC 이름을 저장한다. 형식이 맞고 폴더가 있을 때만 True."""
+    base = local_dir()
+    if not base or not PC_NAME_RE.match(name or ""):
+        return False
+    try:
+        (base / "pc_name.txt").write_text(name + "\n", encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
 def google_key_file():
     return find_file(r"google_credentials", "google_credentials_편집자.json")
 

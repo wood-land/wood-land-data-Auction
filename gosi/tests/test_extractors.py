@@ -229,9 +229,9 @@ class BlockedSites(unittest.TestCase):
                 self.assertFalse(should_run("skip", module, city))
                 self.assertTrue(should_run("only", module, city))
                 self.assertTrue(should_run("all", module, city))
-        self.assertTrue(should_run("skip", "경북", "안동시"))
-        self.assertFalse(should_run("only", "경북", "안동시"))
-        self.assertTrue(should_run("all", "경북", "안동시"))
+        self.assertTrue(should_run("skip", "경북", "경산시"))
+        self.assertFalse(should_run("only", "경북", "경산시"))
+        self.assertTrue(should_run("all", "경북", "경산시"))
         self.assertFalse(should_run("only", "강원", "원주시"))  # 막힌 곳이 없는 지역은 'only' 에서 할 일이 없다
 
 

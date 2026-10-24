@@ -20,9 +20,11 @@ City 형식이 아니라 run_gazette.py 가 board = {"name": "시보"} 와 base_
 
 import datetime as dt
 import re
-from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
+
+from core import http_fetch
 
 HEADERS = {
     "User-Agent": (
@@ -360,6 +362,82 @@ def _yh_inline_post_url(a, soup, base):
     return url + ("&" if "?" in url else "?") + urlencode(q) if q else url
 
 
+_SCRIPT_RE = re.compile(r"<script[^>]*>(.*?)</script>", re.S | re.I)
+_BARE_REDIRECT_RE = re.compile(
+    r"""^\s*(?:window\.|top\.|document\.)?location(?:\.href)?\s*=\s*['"]([^'"]+)['"]\s*;?\s*$"""
+    r"""|^\s*(?:window\.|top\.)?location\.replace\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$""")
+
+
+def _bare_js_redirect(html):
+    """HTML 안에 '이것 하나만 실행하는' 스크립트(location.href='…' 한 줄)가 있으면 그 주소. 없으면 ''.
+    함수 안·조건 안의 이동(function f(){location.href=…})은 이 규칙에 걸리지 않는다(스크립트 본문이 그 한 문장뿐일 때만)."""
+    for body in _SCRIPT_RE.findall(html):
+        body = re.sub(r"//<!\[CDATA\[|//\]\]>", "", body)
+        body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)  # 블록 주석
+        body = re.sub(r"^[ \t]*//[^\r\n]*$", "", body, flags=re.M)  # 줄 주석(한 줄만 지운다)
+        m = _BARE_REDIRECT_RE.match(body)
+        if m:
+            return m.group(1) or m.group(2)
+    return ""
+
+
+def _get(session, url):
+    """GET 하고, 페이지에 '무조건 다른 주소로 보내는 스크립트'(location.href='…' 한 줄)가 있으면 그 주소로 이어서 간다(최대 2번).
+    울릉군 군보 상세는 ?cmd=2 가 메뉴까지 담은 페이지 위쪽에 <script>location.href='?cmd=258&...'</script> 를 두어, 브라우저는 곧바로
+    cmd=258(첨부가 있는 글보기)로 가지만 requests 는 스크립트를 실행하지 않아 첨부가 없다고 읽었다(2026-10-25 실측)."""
+    def once(u):
+        r = session.get(u, headers=HEADERS, timeout=60)
+        r.raise_for_status()
+        return r
+
+    resp = http_fetch.retry_call(lambda: once(url))  # 502 등 일시 오류는 다시 받는다(2026-10-25 나주시 시보 502)
+    for _ in range(2):
+        if "html" not in resp.headers.get("content-type", "html"):
+            break
+        target = _bare_js_redirect(resp.text)
+        nxt = urljoin(resp.url, target) if target else ""
+        if not nxt or nxt == resp.url:
+            break
+        resp = http_fetch.retry_call(lambda n=nxt: once(n))
+    return resp
+
+
+_OPEN_URL_RE = re.compile(r"""window\.open\(\s*['"]([^'"]+)['"]""")
+
+
+def _ebook_card_rows(soup, base, board):
+    """이미지 카드형 전자 간행물 목록(영양군 전자군보): 카드마다 제목(.tit)과 다운로드 버튼(onclick="window.open('/…/file_download/…pdf')")만 있고
+    날짜가 없다. 다른 방식으로 행을 못 찾았을 때만 쓴다. 미리보기(preview) 버튼은 제외한다."""
+    rows = []
+    for el in soup.find_all(attrs={"onclick": True}):
+        m = _OPEN_URL_RE.search(el.get("onclick") or "")
+        if not m or re.search(r"preview", m.group(1), re.I):
+            continue
+        url = m.group(1).replace("&amp;", "&")
+        if not (EXT_RE.search(url) or FILEISH_HREF_RE.search(url) or "file_download" in url):
+            continue
+        title, card = "", el
+        for _ in range(4):
+            card = card.parent
+            if card is None:
+                break
+            t = card.select_one(".tit")
+            if t:
+                title = re.sub(r"\s*새글\s*$", "", re.sub(r"\s+", " ", t.get_text(" ", strip=True)))
+                break
+        if not title:
+            continue
+        full = urljoin(base, url)
+        name = unquote(urlsplit(full).path.rsplit("/", 1)[-1])
+        ext = EXT_RE.search(name)
+        att = {"name": name, "url": full, "ext": ext.group(1).lower() if ext else "pdf", "sized": False}
+        _LIST_FILES[full] = [att]
+        iss = ISSUE_RE.search(title)
+        rows.append({"board": board["name"], "notice_no": iss.group(0) if iss else "", "title": title, "date": None,
+                     "date_str": "", "detail_url": full})
+    return rows
+
+
 def fetch_list_page(session, base_url, board, page_index, page_unit=10):
     """목록 페이지 1개 -> [{"board","notice_no","title","date","date_str","detail_url"}, ...]"""
     if page_index == 1:
@@ -368,8 +446,7 @@ def fetch_list_page(session, base_url, board, page_index, page_unit=10):
         url = _PAGE_MAP.get(base_url, {}).get(page_index)
         if not url:
             return []
-    resp = session.get(url, headers=HEADERS, timeout=60)
-    resp.raise_for_status()
+    resp = _get(session, url)
     if resp.encoding in (None, "ISO-8859-1"):
         resp.encoding = resp.apparent_encoding
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -380,7 +457,7 @@ def fetch_list_page(session, base_url, board, page_index, page_unit=10):
     for c in [_widen(x) for x in _containers(soup)]:
         text = re.sub(r"\s+", " ", c.get_text(" ", strip=True))
         date = _parse_date(text)
-        title_a, files = None, []
+        title_a, files, viewer_a = None, [], None
         for a in c.find_all("a"):
             if _is_file_anchor(a):
                 files.append(_attachment(a, resp.url, page_js, soup))
@@ -388,8 +465,18 @@ def fetch_list_page(session, base_url, board, page_index, page_unit=10):
             if title_a is None and a.get_text(strip=True) and not SKIP_TEXT_RE.match(a.get_text(strip=True)):
                 href = (a.get("href") or "").strip()
                 if (href and not href.lower().startswith(("javascript", "#", "mailto", "tel:"))) or a.get("onclick") or href.lower().startswith("javascript"):
-                    title_a = a
-        title = re.sub(r"\s+", " ", title_a.get_text(" ", strip=True)) if title_a else text[:80]
+                    if VIEWER_RE.search(a.get_text(" ", strip=True)) or VIEWER_RE.search(href) or VIEWER_RE.search(_anchor_js(a)):
+                        viewer_a = viewer_a or a  # '바로 보기' 같은 뷰어 링크는 제목 후보에서 뒤로 미룬다
+                    else:
+                        title_a = a
+        if title_a is None and not files and viewer_a is not None:
+            title_a = viewer_a  # 첨부 링크가 따로 없을 때만 뷰어 링크를 상세로 쓴다
+        if title_a is not None:
+            title = re.sub(r"\s+", " ", title_a.get_text(" ", strip=True))
+        elif files:  # 제목 링크가 없고 첨부만 있으면 첨부 이름(크기 표기 제외)을 제목으로 쓴다
+            title = re.sub(r"\s*\[[\d.,]+\s*[KMGkmg]?B\]\s*$", "", files[0]["name"]).strip() or text[:80]
+        else:
+            title = text[:80]
         m = ISSUE_RE.search(title) or ISSUE_RE.search(text)
         if date is None and not m:
             continue
@@ -419,6 +506,8 @@ def fetch_list_page(session, base_url, board, page_index, page_unit=10):
                 "detail_url": detail_url,
             }
         )
+    if not rows:
+        rows = _ebook_card_rows(soup, resp.url, board)
     return rows
 
 
@@ -430,8 +519,12 @@ def fetch_attachments(session, detail_url):
         return _with_default_previews(found)
     if found and found[0]["url"] == detail_url:
         return _with_default_previews(found)
-    resp = session.get(detail_url, headers=HEADERS, timeout=60)
-    resp.raise_for_status()
+    try:
+        resp = _get(session, detail_url)
+    except Exception:  # noqa: BLE001 - 상세 페이지가 500 등으로 안 열려도 목록에서 이미 본 첨부가 있으면 그걸 쓴다
+        if found:
+            return _with_default_previews(found)
+        raise
     ctype = resp.headers.get("content-type", "")
     if "html" not in ctype and "text" not in ctype:
         return found or [{"name": detail_url.rsplit("/", 1)[-1], "url": detail_url, "ext": ""}]

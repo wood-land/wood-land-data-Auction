@@ -40,6 +40,7 @@ from requests.adapters import HTTPAdapter  # noqa: E402
 from openpyxl import load_workbook  # noqa: E402
 
 from core import gazette_extractor as GX  # noqa: E402
+from core import http_fetch  # noqa: E402
 from core import synap_preview as SP  # noqa: E402
 from core.sqlite_store import post_key  # noqa: E402
 from run_gosigongo import discover_provinces  # noqa: E402
@@ -110,15 +111,18 @@ def download(session, url, referer=None):
     headers = dict(UA_HEADERS)  # 짧은 UA("Mozilla/5.0")는 일부 사이트(대전 서구 등)가 404로 막는다
     if referer:  # 일부 사이트(당진시 등)는 Referer가 없으면 파일 대신 오류 HTML을 준다
         headers["Referer"] = referer
-    r = session.get(url, headers=headers, timeout=90, stream=True)
-    r.raise_for_status()
-    ctype = r.headers.get("content-type", "")
-    buf = bytearray()
-    for chunk in r.iter_content(1 << 16):
-        buf += chunk
-        if len(buf) > MAX_BYTES:
-            raise ValueError("파일이 너무 큼")
-    return bytes(buf), ctype
+    def once():
+        r = session.get(url, headers=headers, timeout=90, stream=True)
+        r.raise_for_status()
+        ctype = r.headers.get("content-type", "")
+        buf = bytearray()
+        for chunk in r.iter_content(1 << 16):
+            buf += chunk
+            if len(buf) > MAX_BYTES:
+                raise ValueError("파일이 너무 큼")
+        return bytes(buf), ctype
+
+    return http_fetch.retry_call(once)  # 일시 오류(400/5xx/시간초과)는 다시 받는다(2026-10-25: 밀양시 공보 첫 시도 실패, 재시도 성공)
 
 
 DUP = object()  # 같은 파일이 이름 링크/다운로드 링크로 두 번 잡힌 경우의 표식

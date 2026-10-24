@@ -49,7 +49,7 @@ class PreflightTest(unittest.TestCase):
 
     def test_blocked_list_keeps_only_confirmed_sites(self):
         from core import blocked_sites as B
-        self.assertEqual(set(B.BLOCKED_ON_HOSTED["전남"]), {"순천시", "강진군", "구례군"})
+        self.assertEqual(set(B.BLOCKED_ON_HOSTED["전남"]), {"순천시", "강진군", "구례군", "함평군", "나주시", "담양군", "장성군"})
         self.assertNotIn("대구", B.BLOCKED_ON_HOSTED)
 
 
