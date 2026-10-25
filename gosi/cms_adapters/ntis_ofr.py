@@ -314,6 +314,28 @@ def fetch_list_page(session, base_url, board, page_index, page_unit=10):
     return rows
 
 
+def fetch_full_title(session, detail_url):
+    """목록이 제목을 '...' 로 잘라 보여 주는 게시판(광주 북구 등)의 전체 제목. 상세 페이지의 '제목' 칸에서 읽는다. 못 읽으면 ''."""
+    base_url, marker, mgt_no = detail_url.partition(_DETAIL_MARKER)
+    if not marker:
+        return ""
+    fields, _soup, _resp = _form_fields(session, base_url, "form1")
+    if fields is None:
+        fields, _soup, _resp = _form_fields(session, base_url, "form")
+    if fields is None:
+        return ""
+    fields["method"] = "selectOfrNotAncmt"
+    fields["methodnm"] = "selectOfrNotAncmtRegst"
+    fields["not_ancmt_mgt_no"] = mgt_no
+    resp = session.post(_site_root(base_url) + _ACTION_PATH, data=fields, headers=HEADERS, timeout=40)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+    for th in soup.find_all(["th", "td"]):
+        if re.sub(r"\s+", "", th.get_text()) == "제목" and th.find_next_sibling() is not None:
+            return re.sub(r"\s+", " ", th.find_next_sibling().get_text(" ", strip=True))
+    return ""
+
+
 def fetch_attachments(session, detail_url):
     """상세 페이지의 첨부파일 [{"name","url","ext","_dl_method","_dl_action","_dl_data"}, ...]
     (다운로드는 하지 않음). url은 참고용 표시값일 뿐이고, 실제 다운로드는

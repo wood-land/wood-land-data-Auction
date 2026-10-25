@@ -27,6 +27,8 @@ from core import jose_extractor
 NOTICE_HEAD_RE = re.compile(
     r"(?m)^[ \t]*[○◉●■▣◆◇▶▷□▪\-\*·]*[ \t]*(?:[가-힣A-Za-z0-9·]{1,12}[ \t]*){0,3}?(?:공고|고시|공시송달|알림)[ \t]*제[ \t]*\d{4}[ \t]*[-–][ \t]*\d+[ \t]*호"
 )
+# 도로명주소 부여 고시: 보상 공고가 아니라 종전주소->도로명주소 대응표라 주소를 뽑으면 엉뚱한 행이 수천 건 나온다(무안군보 1702호, 2026-10-25)
+ROADNAME_HEAD_RE = re.compile(r"(?m)^[ \t]*[○◉●■▣◆◇▶▷□▪\-\*·]*[ \t]*도[ \t]*로[ \t]*명[ \t]*주[ \t]*소[ \t]*부[ \t]*여[ \t]*(?:고[ \t]*시|내[ \t]*역)")
 # 목차 줄("...----- 21", "······ 18")은 공고 머리글이 아니다
 TOC_LINE_RE = re.compile(r"[-·.…]{4,}\s*\d+\s*$")
 
@@ -198,6 +200,14 @@ def split_notices(text):
         if TOC_LINE_RE.search(line):
             continue
         starts.append(m.start())
+    for m in ROADNAME_HEAD_RE.finditer(text):  # 도로명주소 부여 구간을 따로 잘라, 앞뒤 보상 공고에 섞이지 않게 한다
+        line_end = text.find("\n", m.start())
+        if TOC_LINE_RE.search(text[m.start(): line_end if line_end != -1 else len(text)]):
+            continue
+        if any(0 <= m.start() - st < HEAD_WINDOW for st in starts):
+            continue  # 공고 머리글 바로 아래 제목 줄이면 같은 공고(머리글이 이미 구간을 연다)
+        starts.append(m.start())
+    starts = sorted(set(starts))
     if not starts:
         return [text] if text.strip() else []
     starts.append(len(text))
@@ -214,6 +224,8 @@ def is_compensation(notice):
     """제목 부근에 보상 키워드가 있거나, 토지조서/물건조서/보상계획이 본문에 있으면 보상 관련으로 본다."""
     # 공백을 모두 없애고 비교한다(PDF/OCR 본문은 '토지 조서'처럼 글자 사이가 벌어지는 일이 많다)
     head = "".join(notice[:HEAD_WINDOW].split())
+    if "도로명주소부여" in head:
+        return False
     if any("".join(k.split()) in head for k in COMP_KEYWORDS):
         return True
     whole = "".join(notice.split())

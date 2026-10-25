@@ -252,6 +252,16 @@ def run_city(city: City, days: int, output_dir: Path, dry_run: bool, delay: floa
                     hit_older = True
                     continue
                 kws = matched_keywords(row["title"], city.keywords)
+                if not kws and not city.match_all and row["title"].endswith(("...", "…")) and hasattr(adapter, "fetch_full_title"):
+                    # 목록이 제목을 잘라 보여 주면(…) 키워드가 잘린 뒷부분에 있을 수 있어 상세의 전체 제목으로 다시 판정한다
+                    try:
+                        full = adapter.fetch_full_title(session, row["detail_url"])
+                    except requests.RequestException:
+                        full = ""
+                    if full and len(full) > len(row["title"].rstrip(".…")):
+                        row["title"] = full
+                        kws = matched_keywords(full, city.keywords)
+                    time.sleep(delay)
                 if (kws or city.match_all) and not matches_blacklist(row["title"], city.blacklist):
                     row["matched_keywords"] = kws
                     matched.append(row)

@@ -438,6 +438,10 @@ def _ebook_card_rows(soup, base, board):
     return rows
 
 
+# 쪽 번호 링크(?page=2, goPage(2)). 호수만 제목으로 쓰는 게시판(경상남도청 '2834')의 상세 링크와 구별한다
+_PAGER_HREF_RE = re.compile(r"(?:^|[?&])(?:page|pageno|pageindex|cpage|curpage|currentpage|pagenum)=\d+|gopage|fn_?page|movepage", re.I)
+
+
 def fetch_list_page(session, base_url, board, page_index, page_unit=10):
     """목록 페이지 1개 -> [{"board","notice_no","title","date","date_str","detail_url"}, ...]"""
     if page_index == 1:
@@ -473,10 +477,19 @@ def fetch_list_page(session, base_url, board, page_index, page_unit=10):
             title_a = viewer_a  # 첨부 링크가 따로 없을 때만 뷰어 링크를 상세로 쓴다
         if title_a is not None:
             title = re.sub(r"\s+", " ", title_a.get_text(" ", strip=True))
-        elif files:  # 제목 링크가 없고 첨부만 있으면 첨부 이름(크기 표기 제외)을 제목으로 쓴다
-            title = re.sub(r"\s*\[[\d.,]+\s*[KMGkmg]?B\]\s*$", "", files[0]["name"]).strip() or text[:80]
+        elif files:  # 제목 링크가 없고 첨부만 있으면 카드의 제목 요소, 없으면 첨부 이름(크기 표기 제외)을 제목으로 쓴다
+            head = c.select_one("[class*=title], strong, h3, h4, h5")
+            head_text = re.sub(r"\s+", " ", head.get_text(" ", strip=True)) if head else ""
+            title = head_text or re.sub(r"\s*\[[\d.,]+\s*[KMGkmg]?B\]\s*$", "", files[0]["name"]).strip() or text[:80]
         else:
             title = text[:80]
+        if title_a is not None and re.fullmatch(r"[\d\s]{1,4}|[<>«»‹›]+", title) and _PAGER_HREF_RE.search(title_a.get("href") or ""):
+            continue  # 쪽 번호('2')·이전/다음 화살표 링크는 글이 아니다(무안군보 목록 아래 쪽 번호 줄이 오늘 날짜와 함께 글처럼 읽혔다)
+        if date is None:  # 날짜가 목록 글자에 없고 첨부 파일명에만 있는 사이트(무안군보: 군보 1702호(2026. 10. 19.).pdf)
+            for f in files:
+                date = _parse_date(unquote(f["url"]))
+                if date is not None:
+                    break
         m = ISSUE_RE.search(title) or ISSUE_RE.search(text)
         if date is None and not m:
             continue

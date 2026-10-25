@@ -133,5 +133,65 @@ class ViewerLinkNotTitle(unittest.TestCase):
         self.assertEqual([a["url"] for a in atts], ["https://x.go.kr/file/a.pdf"])
 
 
+MUAN = """<html><body><div class="newspaper_list">
+<div class="newspaper_cont"><div class="newspaper_title"><strong>무안군보 제1702호</strong></div><div class="newspaper_btn"><ul>
+<li class="newsview_btn"><a href="/viewer/index.html?idx=301723" target="_blank" title="무안군보 제1702호 전자북 보기(새창)">미리보기</a></li>
+<li class="newsdown_btn"><a href="/ybscript.io/common/file_download/15206923/301723/%EA%B5%B0%EB%B3%B4%201702%ED%98%B8%282026.%2010.%2019.%29.pdf?pkey=U8" title="무안군보 제1702호 10 다운로드"> 10 다운로드</a></li></ul></div></div>
+<div class="newspaper_cont"><div class="newspaper_title"><strong>무안군보 제1701호</strong></div><div class="newspaper_btn"><ul>
+<li class="newsview_btn"><a href="/viewer/index.html?idx=301512" target="_blank" title="무안군보 제1701호 전자북 보기(새창)">미리보기</a></li>
+<li class="newsdown_btn"><a href="/ybscript.io/common/file_download/15206780/301512/%EA%B5%B0%EB%B3%B4%201701%ED%98%B8%282026.%2010.%2012.%29.pdf?pkey=U9" title="무안군보 제1701호 10 다운로드"> 10 다운로드</a></li></ul></div></div>
+</div><div class="paging"><strong>1</strong> <a href="?page=2">2</a> <a href="?page=3">3</a></div></body></html>"""
+
+
+class CardTitleAndDate(unittest.TestCase):
+    def test_title_from_card_heading_and_date_from_file_name(self):
+        rows = GG.fetch_list_page(FakeSession({"https://www.muan.go.kr/n": MUAN}), "https://www.muan.go.kr/n", {"name": "군보"}, 1)
+        self.assertEqual([r["title"] for r in rows], ["무안군보 제1702호", "무안군보 제1701호"])  # '10'(다운로드 횟수)·쪽 번호 '2' 가 글이 되지 않는다
+        self.assertEqual([r["date_str"] for r in rows], ["2026-10-19", "2026-10-12"])
+
+
+GYEONGNAM_DO = """<table><tbody>
+<tr><td class="num">364</td><td class="dcmNo">제<a href="/board/view.gyeong?boardId=B&amp;menuCd=D&amp;startPage=1&amp;dataSid=1" title="2834">2834</a>호</td><td>2026-10-22</td>
+<td class="btn"><a href="/board/download.gyeong?boardId=B&amp;dataSid=1&amp;fileSid=9" title="제2834호.pdf 다운받기"><span>다운로드</span></a></td></tr>
+<tr><td class="num">363</td><td class="dcmNo">제<a href="/board/view.gyeong?boardId=B&amp;menuCd=D&amp;startPage=1&amp;dataSid=2" title="2833">2833</a>호</td><td>2026-10-15</td>
+<td class="btn"><a href="/board/download.gyeong?boardId=B&amp;dataSid=2&amp;fileSid=8" title="제2833호.pdf 다운받기"><span>다운로드</span></a></td></tr>
+</tbody></table>"""
+
+
+class IssueNumberTitleKept(unittest.TestCase):
+    def test_issue_number_links_are_not_treated_as_pager(self):
+        rows = GG.fetch_list_page(FakeSession({"https://www.gyeongnam.go.kr/l": GYEONGNAM_DO}), "https://www.gyeongnam.go.kr/l", {"name": "공보"}, 1)
+        self.assertEqual([r["title"] for r in rows], ["2834", "2833"])  # 호수만 적힌 상세 링크는 글이다
+
+
+class RoadNameNoticeNotCompensation(unittest.TestCase):
+    TEXT = """무안군 고시 제2026 - 130호
+도 로 명 주 소 부 여 고 시
+「도로명주소법」제11조에 따라 부여한 도로명주소를 고시합니다.
+구분 종전주소 도로명 주소
+1 무안군 일로읍 오룡리 337 오룡남로 54
+무안군 공고 제2026-1085호 무안 군계획시설(연구시설)사업 보상 공고
+무안읍 매곡리 775-6 전 100
+"""
+
+    def test_road_name_section_is_split_off_and_not_compensation(self):
+        from core import gazette_extractor as GX
+        parts = GX.split_notices(self.TEXT)
+        flags = [GX.is_compensation(p) for p in parts]
+        self.assertEqual(len(parts), 2)
+        self.assertEqual(flags, [False, True])
+
+    def test_road_name_heading_without_notice_number_still_split(self):
+        from core import gazette_extractor as GX
+        text = """군보 머리
+○ 도로명주소 부여 내역
+종전주소 오룡리 337
+무안군 공고 제2026-1085호 보상 공고
+매곡리 775-6
+"""
+        flags = [GX.is_compensation(p) for p in GX.split_notices(text)]
+        self.assertEqual(flags, [False, True])
+
+
 if __name__ == "__main__":
     unittest.main()
