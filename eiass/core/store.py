@@ -22,9 +22,10 @@ def _db_repo_dir():
     env = os.environ.get("WOOD_LAND_DB_DIR", "").strip()
     if env:
         return Path(env)
-    sib = ROOT.parent.parent / "wood-land-data-db"
-    if (sib / ".git").exists():
-        return sib
+    # gosi(core/paths.py)와 같은 자리: 코드 저장소 안 wood-land-data-db/ (PC 에서 두 크롤러가 한 DB 저장소를 함께 쓴다), 그다음 코드 저장소 옆 폴더
+    for sib in (ROOT.parent / "wood-land-data-db", ROOT.parent.parent / "wood-land-data-db"):
+        if (sib / ".git").exists():
+            return sib
     return ROOT / "data"
 
 

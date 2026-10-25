@@ -56,7 +56,7 @@ def _main(no_git, rec):
         print("  지난 기록: " + pc_common.summary(old))
     rec["stage"] = "check"
     if not (db / ".git").exists():
-        print(f"DB 저장소가 없습니다: {db}\n  git clone https://github.com/wood-land/wood-land-data-db.git \"{HERE.parent.parent / 'wood-land-data-db'}\"")
+        print(f"DB 저장소가 없습니다: {db}\n  git clone https://github.com/wood-land/wood-land-data-db.git \"{HERE.parent / 'wood-land-data-db'}\"")
         rec["result"] = "stopped: no db repo"
         return 1
     if not no_git:
@@ -72,19 +72,20 @@ def _main(no_git, rec):
     rec["stage"] = "collect"
     rc = subprocess.call([sys.executable, str(HERE / "run_eiass.py"), "--pages", "3", "--retry-review"], cwd=HERE)
     rec["regions"]["eiass"] = {"status": "ok" if rc == 0 else f"exit {rc}"}
+    done = "collected" if rc == 0 else f"collect failed (exit {rc})"
     if no_git:
-        rec["result"] = "collected (no-git)"
+        rec["result"] = done + " (no-git)"
         return rc
     rec["stage"] = "push"
-    rec["result"] = "collected"  # 이 줄이 DB 저장소에 올라간다. push 성공 여부는 이 PC 의 로컬 기록에 남는다
+    rec["result"] = done  # 이 줄이 DB 저장소에 올라간다(실패한 실행도 남긴다). push 성공 여부는 이 PC 의 로컬 기록에 남는다
     pc_common.append_record(runs_file, rec)
     git(db, "add", "eiass")
     if git(db, "diff", "--cached", "--quiet", check=False).returncode == 0:
-        print("변경 없음"); rec["result"] = "ok (no change)"; return rc
+        print("변경 없음"); rec["result"] = "ok (no change)" if rc == 0 else done; return rc
     git(db, "commit", "-m", f"eiass: 국내 IP PC 처리 결과 [{pc}]")
     for _ in range(5):
         if git(db, "pull", "--rebase", check=False).returncode == 0 and git(db, "push", check=False).returncode == 0:
-            print("올리기 완료"); rec["result"] = "ok"; return rc
+            print("올리기 완료"); rec["result"] = "ok" if rc == 0 else done; return rc
     print("push 실패 - 나중에 다시 실행하세요"); rec["result"] = "push failed"; return 1
 
 

@@ -34,6 +34,17 @@ def db_repo_dir():
     return Path(DB_REPO_DIR)
 
 
+def ensure_requirements(cwd, env):
+    """실행 전에 그 작업의 requirements.txt 를 맞춘다(이미 설치돼 있으면 금방 끝남). bat 이 하던 일을 터미널 패널 실행에서도 하게 한다."""
+    req = Path(cwd) / "requirements.txt"
+    if not req.is_file():
+        return True
+    rc = subprocess.call([sys.executable, "-m", "pip", "install", "-q", "-r", str(req)], cwd=str(cwd), env=env)
+    if rc != 0:
+        print(f"[주의] {req} 설치에 실패했습니다(네트워크 확인). 이미 설치돼 있으면 그대로 진행합니다.")
+    return rc == 0
+
+
 def job_args(key, argv):
     return [a for a in argv if a in JOBS[key][3]]
 
@@ -62,6 +73,7 @@ def main(argv=None):
     for key in selected(argv):
         label, cwd, script, _ = JOBS[key]
         print(f"\n########## {label} ##########", flush=True)
+        ensure_requirements(cwd, env)
         results[key] = subprocess.call([sys.executable, "-u", script] + job_args(key, argv), cwd=str(cwd), env=env)
     print("\n========== 결과 ==========")
     for key, rc in results.items():

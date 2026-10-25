@@ -110,6 +110,8 @@ class RunAll(unittest.TestCase):
         calls = []
 
         def fake_call(cmd, cwd=None, env=None):
+            if "pip" in cmd:  # requirements 설치는 작업 호출이 아니다
+                return 0
             calls.append((Path(cwd).name, cmd[-1] if cmd[-1].startswith("--") else cmd[2], env["GOSI_PC_NAME"]))
             return 3 if Path(cwd).name == "gosi" else 0
 
@@ -118,6 +120,14 @@ class RunAll(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual([c[0] for c in calls], ["gosi", "eiass"])
         self.assertTrue(all(c[2] == "PCwj" for c in calls))
+
+    def test_requirements_installed_before_each_job(self):
+        calls = []
+        with mock.patch.object(A.pc_common, "ensure_pc_name", return_value="PCwj"),              mock.patch.object(A.subprocess, "call", side_effect=lambda cmd, cwd=None, env=None: calls.append(cmd) or 0):
+            A.main(["--no-git"])
+        pips = [c for c in calls if "pip" in c]
+        self.assertEqual(len(pips), 2)  # gosi, eiass 각각 requirements.txt
+        self.assertTrue(all(c[-1].endswith("requirements.txt") for c in pips))
 
     def test_stops_without_pc_name(self):
         with mock.patch.object(A.pc_common, "ensure_pc_name", return_value=""):
