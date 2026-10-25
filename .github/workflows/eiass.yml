@@ -37,6 +37,7 @@ on:
 
 permissions:
   contents: read
+  issues: write    # 사람 확인이 필요할 때 이 저장소에 이슈로 알린다(notify.py)
 
 concurrency:
   group: eiass-choan
@@ -91,6 +92,13 @@ jobs:
           [ "$RETRY" = "true" ] && ARGS="$ARGS --retry-review"
           [ "$TEST" = "true" ] && ARGS="$ARGS --test"
           python run_eiass.py $ARGS
+
+      - name: 사람 확인 필요 알림 (GitHub 이슈)
+        if: always() && github.event.inputs.mode != 'diag' && github.event.inputs.test != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python notify.py
 
       - name: Commit eiass/ (비공개 DB 저장소)
         if: always() && github.event.inputs.mode != 'diag'
