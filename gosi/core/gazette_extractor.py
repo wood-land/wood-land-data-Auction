@@ -278,7 +278,7 @@ def generic_rows(notice, default_sido="", default_sigun=""):
     text = re.sub(r"\s+", " ", notice)
     rows, seen = [], set()
 
-    def add(sido, sigun, eup, ri, jibun, jimok="", area="", remark=""):
+    def add(sido, sigun, eup, ri, jibun, jimok="", area="", remark="", owner_type=""):
         if ri in _NOT_RI:
             return
         j = _clean_jibun(jibun)
@@ -289,7 +289,7 @@ def generic_rows(notice, default_sido="", default_sigun=""):
         if key in seen:
             return
         seen.add(key)
-        rows.append({"sojaeji": soj, "jibun_incl": j, "jimok": jimok, "area_incl": area, "remark": remark})
+        rows.append({"sojaeji": soj, "jibun_incl": j, "jimok": jimok, "area_incl": area, "remark": remark, "owner_type": owner_type})
 
     for m in PROSE_ADDR_RE.finditer(text):
         tail = text[m.end():m.end() + 14]
@@ -301,21 +301,19 @@ def generic_rows(notice, default_sido="", default_sigun=""):
     for n, (eup, ri, m) in enumerate(bare):
         nxt = bare[n + 1][2].start() if n + 1 < len(bare) else m.end() + 80
         seg = text[m.end():nxt]  # 면적 뒤 ~ 다음 행 앞: 소유자 칸 글자
-        if re.match(r"\s*[국공]\s*\(", seg):
-            continue  # 면적 바로 뒤 소유자 칸이 '국(기획재정부)' 처럼 국·공유 표기면 제외(사용자 지시). 사유지는 이 칸 앞에 주소 칸이 와서 걸리지 않는다
+        public = bool(re.match(r"\s*[국공]\s*\(", seg))  # 소유자 칸이 국·공유 표기면 공공 소유로 표시(수집은 한다)
         areas = [x for x in (m.group("a1"), m.group("a2")) if x]
         add(None, None, eup, ri, m.group("jibun"), jimok=m.group("jimok"),
-            area=(areas[-1] if areas else ""), remark="표 행(면·리 열)")
+            area=(areas[-1] if areas else ""), remark="표 행(면·리 열)", owner_type="국공유" if public else "")
     for m in TABLE_ROW_RE.finditer(text):
         if any(a <= m.start() < b for a, b in spans):
             continue
         if not m.group("eup") and re.search(r"(?<![\d-])\d{1,3}\s+[가-힣]{1,4}\s$", text[max(0, m.start() - 12):m.start()]):
             continue  # '연번 단어 리 지번' = 면 열 값이 접미사 없이 앞에 붙은 행인데 면·리를 문서에서 확인 못 했다 -> 리만 떼어 쓰면 틀린 주소가 되므로 읽지 않는다
-        if jose_extractor.is_public_owner(m.group("owner") or ""):
-            continue  # 소유자가 국가·지자체·공공기관인 필지는 제외(사용자 지시)
+        public = jose_extractor.is_public_owner(m.group("owner") or "")  # 소유자가 국가·지자체·공공기관이면 공공 소유로 표시(수집은 한다)
         areas = [x for x in (m.group("a1"), m.group("a2")) if x]
         add(None, None, m.group("eup"), m.group("ri"), m.group("jibun"), jimok=m.group("jimok"),
-            area=(areas[-1] if areas else ""), remark="표 행")
+            area=(areas[-1] if areas else ""), remark="표 행", owner_type="국공유" if public else "")
     return rows
 
 
@@ -347,6 +345,7 @@ def extract_rows(notice, regions, site_name="", source_file="", title="", collec
             "area_incl": r.get("area_incl", ""),
             "project_name": r.get("project_name", ""),
             "remark": r.get("remark", ""),
+            "owner_type": r.get("owner_type", ""),
             "source_file": source_file,
             "collected_at": collected_at,
         }

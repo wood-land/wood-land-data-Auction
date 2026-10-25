@@ -38,12 +38,14 @@ def run_fixture(name, sido, sigun):
 
 class ExtractionRegressions(unittest.TestCase):
     def test_pocheon_location_in_heading_above_table(self):
-        """포천: 소재지가 표 열이 아니라 표 위 제목줄에 있다 -> 소재지가 채워지고 공공 소유(국/공)는 빠진다."""
+        """포천: 소재지가 표 열이 아니라 표 위 제목줄에 있다 -> 소재지가 채워지고 공공 소유(국/공)는 owner_type='국공유' 로 표시돼 함께 나온다."""
         rows, debug = run_fixture("pocheon_pdf_heading", "경기도", "포천시")
-        self.assertTrue(rows, "사유 필지가 하나도 안 나옴")
+        self.assertTrue(rows, "필지가 하나도 안 나옴")
         for r in rows:
             self.assertTrue(r["sojaeji"].startswith("경기도 포천시 가산면 방축리"), r["sojaeji"])
-        self.assertTrue(any(d["reason"] == "public-owner" for d in debug), "공공 소유 제외 기록 없음")
+        kinds = {r.get("owner_type") for r in rows}
+        self.assertIn("국공유", kinds, "공공 소유 필지가 표시돼 나와야 한다")
+        self.assertTrue(kinds - {"국공유"}, "사유(또는 소유 미상) 필지도 함께 나와야 한다")
 
     def test_gapyeong_title_row_does_not_poison_headers(self):
         """가평 xlsx: 표 제목줄('편 입 용 지 조 서')이 머리글에 섞여 열 판별이 깨지던 문제 + 읍면동/리명 열."""
@@ -626,27 +628,28 @@ class DeclaredLocationAndSanOrder(unittest.TestCase):
 
 
 class PublicLandInGazetteTables(unittest.TestCase):
-    """공보(글로 펴진 표)에서도 소유자가 국가·공공기관이면 저장하지 않는다. 소유자가 안 적힌 표는 그대로 읽는다."""
+    """공보(글로 펴진 표)에서 소유자가 국가·공공기관이면 owner_type='국공유' 로 표시해 함께 수집한다(2026-10-26 사용자 지시, 이전에는 제외).
+    소유자가 안 적힌 표는 owner_type 이 빈 값(DB 에서는 미상)이다."""
 
     R = J.Regions("충청남도", "아산시")
 
     def lots(self, text):
-        return [r["jibun_incl"] for r in self.R.rows_from_text(text)]
+        return [(r["jibun_incl"], r["owner_type"]) for r in self.R.rows_from_text(text)]
 
     def test_public_owner_headings_and_owner_cells(self):
         text = ("- 소관청별 토지조서 국유지 - 농림축산식품부 (변경없음) 구분 소재지 지번 지목 대장면적 편입면적 귀속면적 소유관청 비고 "
                 "1 동암리 701-6 도 958.0 958.0 958.0 농림축산식품부 2 동암리 701-7 도 360.0 360.0 360.0 농림축산식품부 "
                 "- 소관청별 토지조서 공유지 - 아산시 (변경없음) 1 동암리 727-1 도 3,333.1 3,333.1 3,333.1 아산시 "
                 "- 관할기관 무상귀속분 (변경없음)")
-        self.assertEqual(self.lots(text), [])  # 국유지·공유지 소제목 아래 표는 모두 제외
+        self.assertEqual(self.lots(text), [("701-6", "국공유"), ("701-7", "국공유"), ("727-1", "국공유")])  # 국유지·공유지 소제목 아래 표는 공공으로 표시
 
     def test_private_and_unstated_owner_tables_are_kept(self):
         text = ("- 토지조서 사유지 구분 소재지 지번 지목 면적 1 동암리 801-1 전 100.0 100.0 2 동암리 802 답 200.0 200.0 ")
-        self.assertEqual(self.lots(text), ["801-1", "802"])  # 소유자 표기가 없으면 어쩔 수 없이 읽는다
+        self.assertEqual(self.lots(text), [("801-1", ""), ("802", "")])  # 소유자 표기가 없으면 소유 미상으로 읽는다
         mixed = ("- 토지조서 국유지 1 동암리 701-6 도 958.0 958.0 농림축산식품부 "
                  "- 토지조서 사유지 1 동암리 801-1 전 100.0 100.0 2 동암리 802 답 200.0 200.0 ")
-        self.assertEqual(self.lots(mixed), ["801-1", "802"])  # 사유지 소제목이 더 가까우면 다시 읽는다
+        self.assertEqual(self.lots(mixed), [("701-6", "국공유"), ("801-1", ""), ("802", "")])  # 사유지 소제목이 더 가까우면 다시 사유 쪽으로 읽는다
 
     def test_owner_agency_after_row_without_heading(self):
         text = "1 동암리 701-6 도 958.0 958.0 농림축산식품부 2 동암리 801-1 전 100.0 100.0 홍길동 "
-        self.assertEqual(self.lots(text), ["801-1"])
+        self.assertEqual(self.lots(text), [("701-6", "국공유"), ("801-1", "")])

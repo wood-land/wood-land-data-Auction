@@ -2,7 +2,7 @@
 core/sqlite_store.py - 수집 결과를 SQLite(data/{지역}.sqlite)에 누적 저장한다. git 에 올라가는 파일이라 중복 없이 담는다.
 
 - notices(id, url, title, post_date, city, source_type, project_name): 고시공고/공보 공고 1건 = 1행. 제목·링크·공사명은 여기에만 둔다.
-- parcels(pnu, notice_id, sojaeji, jibun, jimok, area_incl, verified, first_seen_at): PNU 가 있는 필지만(verified=0 은 리 코드로 조립한 것). 공고 정보는 notice_id 로 연결.
+- parcels(pnu, notice_id, sojaeji, jibun, jimok, area_incl, verified, owner_kind, first_seen_at): owner_kind=사유/공공/미상(2026-10-26 이전 행 NULL). PNU 가 있는 필지만(verified=0 은 리 코드로 조립한 것). 공고 정보는 notice_id 로 연결.
   조회: SELECT * FROM v_parcels (parcels + notices 를 합친 뷰: pnu, sojaeji, verified, first_seen_at, title, project_name, url, post_date ...)
 - parcels_unresolved: PNU 변환에 실패한 주소. 다음 실행 때 자동 재시도, 성공하면 parcels 로 이동.
 - gazette_board_status / runs: 점검용 작은 표.
@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS parcels (
     sojaeji TEXT, jibun TEXT, jimok TEXT, area_incl TEXT,
     verified INTEGER NOT NULL DEFAULT 1,  -- 1: 카카오가 그 지번을 확인 / 0: 리 법정동코드+지번으로 조립(존재 미확인)
     first_seen_at TEXT,  -- 이 필지를 처음 수집한 시각(UTC). 경공매와 '새로 겹친' 물건만 고를 때 쓴다(예전 행은 NULL)
+    owner_kind TEXT,  -- 소유구분: 사유 / 공공(국가·지자체·공공기관) / 미상(소유자 칸이 없거나 분류 불가). 2026-10-26 이전 행은 NULL(그때는 사유지만 수집했다)
     ocr INTEGER NOT NULL DEFAULT 0,  -- 1: 글자 층이 없는 이미지 문서를 OCR 로 읽은 행(숫자 오인식 위험, 약 70% 정확). 0: 문서 글자 층에서 읽음(2026-10-18 이전 행은 구분 없이 0)
     UNIQUE (pnu, notice_id)
 );
@@ -43,7 +44,7 @@ CREATE TABLE IF NOT EXISTS parcels_unresolved (
     sojaeji TEXT, jibun TEXT, jimok TEXT, area_incl TEXT, city TEXT, source_type TEXT,
     title TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', post_date TEXT,
     reason TEXT, attempts INTEGER DEFAULT 1, resolver_version INTEGER, ai_tried INTEGER DEFAULT 0,
-    last_tried_at TEXT, project_name TEXT, ocr INTEGER DEFAULT 0,
+    last_tried_at TEXT, project_name TEXT, ocr INTEGER DEFAULT 0, owner_kind TEXT,
     UNIQUE (sojaeji, jibun, url, title)
 );
 CREATE TABLE IF NOT EXISTS seen_posts (  -- 처리를 끝낸 게시글 기록: 7일 창에서 같은 글을 매번 다시 받지 않으려고 둔다
@@ -68,14 +69,14 @@ CREATE INDEX IF NOT EXISTS ix_parcels_notice ON parcels(notice_id);
 CREATE INDEX IF NOT EXISTS ix_notices_date ON notices(post_date);
 -- 경공매 PNU 와 비교할 때 쓰는 조회용 뷰: SELECT * FROM v_parcels WHERE pnu IN (...)
 CREATE VIEW IF NOT EXISTS v_parcels AS
-SELECT p.pnu, p.sojaeji, p.jibun, p.jimok, p.area_incl, p.verified, p.ocr, p.first_seen_at,
+SELECT p.pnu, p.sojaeji, p.jibun, p.jimok, p.area_incl, p.verified, p.owner_kind, p.ocr, p.first_seen_at,
        n.title, n.project_name, n.url, n.post_date, n.city, n.source_type
 FROM parcels p JOIN notices n ON n.id = p.notice_id;
 """
 
 
 # 추출 규칙·문서 해석 코드를 고쳐 이미 처리한 글도 다시 읽어야 할 때 올린다(기록의 version 이 다르면 건너뛰지 않는다)
-EXTRACT_VERSION = 2  # 2(2026-10-18): 표 머리글·소재지 조립·입찰 위치 규칙 개선분을 반영해 이미 처리한 글도 한 번 다시 읽는다
+EXTRACT_VERSION = 3  # 3(2026-10-26): 국가·지자체 소유 필지도 수집(owner_kind 표시)하게 바뀌어 7일 창의 글을 한 번 다시 읽는다 /  2(2026-10-18): 표 머리글·소재지 조립·입찰 위치 규칙 개선분을 반영해 이미 처리한 글도 한 번 다시 읽는다
 EMPTY_RETRIES = 2  # 필지 없이 끝난 글은 이 횟수만큼 읽은 뒤에야 건너뛴다(한 번은 더 시도해 해석 개선을 반영)
 SEEN_KEEP_DAYS = 30
 
@@ -195,7 +196,8 @@ def _ensure_columns(con):
     """예전 DB 에 새 열(project_name, first_seen_at)을 덧붙인다. 표가 아직 없으면(새 DB) 건너뛴다."""
     for table, col, ddl in (("notices", "project_name", "TEXT"), ("parcels", "first_seen_at", "TEXT"),
                             ("parcels_unresolved", "project_name", "TEXT"),
-                            ("parcels", "ocr", "INTEGER NOT NULL DEFAULT 0"), ("parcels_unresolved", "ocr", "INTEGER DEFAULT 0")):
+                            ("parcels", "ocr", "INTEGER NOT NULL DEFAULT 0"), ("parcels_unresolved", "ocr", "INTEGER DEFAULT 0"),
+                            ("parcels", "owner_kind", "TEXT"), ("parcels_unresolved", "owner_kind", "TEXT")):
         cols = _cols(con, table)
         if cols and col not in cols:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
@@ -238,13 +240,21 @@ def _notice_id(con, a, city, source_type):
     return nid
 
 
+def owner_kind(owner_type):
+    """추출기의 owner_type(국공유/법인/사유/빈 값/확인필요) -> DB 의 소유구분(공공/사유/미상). 법인은 민간이라 사유로 본다."""
+    return {"국공유": "공공", "사유": "사유", "법인": "사유"}.get(owner_type or "", "미상")
+
+
 def _insert_parcel(con, pnu, a, city, source_type, verified=1):
     nid = _notice_id(con, a, city, source_type)
     cur = con.execute(
-        "INSERT OR IGNORE INTO parcels (pnu, notice_id, sojaeji, jibun, jimok, area_incl, verified, first_seen_at, ocr) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT OR IGNORE INTO parcels (pnu, notice_id, sojaeji, jibun, jimok, area_incl, verified, first_seen_at, ocr, owner_kind) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (pnu, nid, a.get("sojaeji"), a.get("jibun"), a.get("jimok"), a.get("area_incl"), verified, now(),
-         1 if a.get("ocr") else 0))
+         1 if a.get("ocr") else 0, owner_kind(a.get("owner_type"))))
+    if not cur.rowcount and owner_kind(a.get("owner_type")) != "미상":  # 소유구분을 몰랐던(NULL/미상) 기존 행은 이번에 알게 된 값으로 채운다
+        con.execute("UPDATE parcels SET owner_kind=? WHERE pnu=? AND notice_id=? AND (owner_kind IS NULL OR owner_kind='미상')",
+                    (owner_kind(a.get("owner_type")), pnu, nid))
     if not cur.rowcount and not a.get("ocr"):  # 같은 필지를 글자 층에서 다시 읽었다면 OCR 표시를 푼다(더 믿을 수 있는 출처)
         con.execute("UPDATE parcels SET ocr=0 WHERE pnu=? AND notice_id=? AND ocr=1", (pnu, nid))
     if not cur.rowcount and verified:  # 같은 PNU 가 예전에 조립(verified=0)으로 들어갔다면 확인된 것으로 갱신
@@ -275,11 +285,11 @@ def save_parcels(con, resolver, city, source_type, rows):
         con.execute(
             """INSERT OR IGNORE INTO parcels_unresolved
                (sojaeji, jibun, jimok, area_incl, city, source_type, title, url, post_date, reason, attempts,
-                resolver_version, ai_tried, last_tried_at, project_name, ocr) VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?)""",
+                resolver_version, ai_tried, last_tried_at, project_name, ocr, owner_kind) VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?)""",
             (a.get("sojaeji"), a.get("jibun"), a.get("jimok"), a.get("area_incl"), city, source_type, _title(a),
              a.get("post_url") or "", a.get("post_date"), reason, RESOLVER_VERSION,
              1 if resolver.ai.enabled else 0, t, " ".join((a.get("project_name") or "").split())[:100],
-             1 if a.get("ocr") else 0),
+             1 if a.get("ocr") else 0, owner_kind(a.get("owner_type"))),
         )
     con.commit()
     return new, failed
@@ -294,14 +304,14 @@ def retry_unresolved(con, resolver, recheck_days=30):
         if not re.search(r"[가-힣]", re.sub(r"(?:^|\s)산(?=\s*\d)", " ", soj or "")):  # 지번('산13-4' 포함)뿐인 행
             con.execute("DELETE FROM parcels_unresolved WHERE rowid=?", (rowid,))
     rows = con.execute(
-        """SELECT rowid, sojaeji, jibun, jimok, area_incl, city, source_type, title, url, post_date, project_name, ocr
+        """SELECT rowid, sojaeji, jibun, jimok, area_incl, city, source_type, title, url, post_date, project_name, ocr, owner_kind
            FROM parcels_unresolved
            WHERE reason IN ('transient','no_key') OR resolver_version < ?
               OR (ai_tried = 0 AND ?) OR last_tried_at < datetime('now', ?)""",
         (RESOLVER_VERSION, 1 if resolver.ai.enabled else 0, f"-{recheck_days} days"),
     ).fetchall()
     t, fixed = now(), 0
-    for rowid, sojaeji, jibun, jimok, area, city, source_type, title, url, post_date, project_name, ocr in rows:
+    for rowid, sojaeji, jibun, jimok, area, city, source_type, title, url, post_date, project_name, ocr, okind in rows:
         pnu, reason = resolver.resolve_full(sojaeji, jibun, title or "", city or "", title or "", "", jimok or "")
         if reason == "not_parcel":  # 필지가 아닌 행은 재시도 대상이 아니다
             con.execute("DELETE FROM parcels_unresolved WHERE rowid=?", (rowid,))
@@ -310,7 +320,8 @@ def retry_unresolved(con, resolver, recheck_days=30):
             LOG.pnu_fail(city, source_type, sojaeji, jibun, jimok, reason, title, url)
         if pnu:
             a = {"sojaeji": resolver.last_full or sojaeji, "jibun": jibun, "jimok": jimok, "area_incl": area, "post_title": title,
-                 "post_url": url, "post_date": post_date, "project_name": project_name, "ocr": ocr}
+                 "post_url": url, "post_date": post_date, "project_name": project_name, "ocr": ocr,
+                 "owner_type": {"공공": "국공유", "사유": "사유"}.get(okind or "", "")}
             _insert_parcel(con, pnu, a, city, source_type, 0 if reason == "ok_ri" else 1)
             con.execute("DELETE FROM parcels_unresolved WHERE rowid=?", (rowid,))
             fixed += 1

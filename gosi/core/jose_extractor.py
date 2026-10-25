@@ -78,7 +78,7 @@ def classify_owner(text):
     return "확인필요"
 
 
-# 소유자가 국가·지자체·공공기관인 필지는 수집하지 않는다(사용자 지시 2026-10-16: 사유지만 필요).
+# 소유자가 국가·지자체·공공기관인 필지도 수집하되 owner_type='국공유'(DB 의 owner_kind='공공')로 표시한다(사용자 지시 2026-10-26: QGIS 에서 경공매와 겹침 확인에 쓴다. 이전 2026-10-16 지시는 사유지만).
 # 표의 소유자 칸은 '국'/'공' 같은 한 글자 구분, 기관명('국토교통부', '경기도', '한국도로공사'), 사람 이름이 섞여 있다.
 _PUBLIC_CODES = {"국", "공", "국유", "공유", "시유", "도유", "군유", "구유", "국공유", "국유지", "공유지", "시유지", "도유지", "군유지"}
 _PUBLIC_AGENCY_RE = re.compile(
@@ -731,9 +731,6 @@ def rows_by_cols(grid, hdr, cols, heads, ctx):
             oj = parse_jibun_cell(row[cols["jibun_orig"]])
             orig_j = oj[0][0] if oj else ""
         owner_type = classify_owner_row(g("owner_div"), g("name"), g("addr") if "addr" in cols else None)
-        if owner_type == "국공유":
-            ctx["skipped_public"] = ctx.get("skipped_public", 0) + len(parcels)
-            continue  # 국가·지자체·공공기관 소유 필지는 제외(사용자 지시)
         for j, par_area in parcels:
             area_incl = num(g("area_incl")) if "area_incl" in cols else ""
             if not area_incl and par_area:
@@ -762,9 +759,6 @@ def rows_embedded(grid, hdr, cols, ctx):
         g = lambda k: clean(grid[r][cols[k]]) if k in cols else ""
         j = re.sub(r"\s", "", m.group(2))
         owner_type = classify_owner_row(g("owner_div"), g("name"), g("addr") if "addr" in cols else None)
-        if owner_type == "국공유":
-            ctx["skipped_public"] = ctx.get("skipped_public", 0) + 1
-            continue
         out.append({
             "sojaeji": m.group(1), "jibun_incl": j, "jibun_orig": j,
             "jimok": g("jimok"), "area_incl": num(g("area_incl")) if "area_incl" in cols else num(g("area_orig")),
@@ -1171,17 +1165,15 @@ class Regions:
             if not region or re.fullmatch(r"산?0+(-0+)?", jb):
                 continue
             prev_end = end
-            if re.match(r"\s*[국공]\s*\(", text[end:end + 12]):
-                continue  # 면적 바로 뒤 소유자 칸이 '국(기획재정부)' 처럼 국·공유 표기면 제외(law.md 1-2절 사유지만)
+            public = bool(re.match(r"\s*[국공]\s*\(", text[end:end + 12]))  # 면적 바로 뒤 소유자 칸이 '국(기획재정부)' 처럼 국·공유 표기면 공공 소유로 표시(수집은 한다: law.md 1-2절)
             ow = re.match(r"\s*([가-힣()·]{2,14})", text[end:end + 30])
-            if pub_section or (ow and is_public_owner(ow.group(1))):
-                continue  # 소유자 칸이 국가·공공기관('농림축산식품부')이거나 '국유지·공유지' 소제목 아래 표 -> 사유지만 수집(사용자 지시 2026-10-18; 소유자가 안 적힌 표는 그대로 읽는다)
+            public = public or bool(pub_section or (ow and is_public_owner(ow.group(1))))  # 소유자 칸이 국가·공공기관이거나 '국유지·공유지' 소제목 아래 표면 공공 소유로 표시
             if a2 is not None:
                 orig, incl = (a2, a1) if incl_first else (a1, a2)
             else:
                 orig, incl = "", a1
             rows.append({"sojaeji": region, "jibun_incl": jb, "jibun_orig": jb, "jimok": m.group("jimok"),
-                         "area_incl": num(incl), "area_orig": num(orig), "owner_type": "", "remark": ""})
+                         "area_incl": num(incl), "area_orig": num(orig), "owner_type": "국공유" if public else "", "remark": ""})
         return rows, last
 
     def rows_from_text_B(self, text):
