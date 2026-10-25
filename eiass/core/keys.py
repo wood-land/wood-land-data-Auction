@@ -2,7 +2,7 @@
 core/keys.py - API 키 찾기. 환경변수가 먼저, 없으면 PC 의 500_local 폴더(git 제외)에서 찾는다.
   VWORLD_API_KEY      : 500_local 아래 이름에 vworld/브이월드 가 든 폴더의 파일(XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX 형식)
   KAKAO_REST_API_KEY  : 500_local 아래 이름에 kakao/카카오 가 든 폴더의 파일(32자리)
-500_local 위치: 환경변수 GOSI_LOCAL_DIR -> 상위 폴더들 중 '500_local' (gosi/core/local_dir.py 와 같은 규칙)
+500_local 위치: 환경변수 GOSI_LOCAL_DIR -> eiass/.local_dir 또는 gosi/.local_dir -> 상위 폴더들 중 '500_local' (gosi/core/local_dir.py 와 같은 규칙)
 """
 import os
 import re
@@ -19,6 +19,14 @@ def _local_dir():
     env = os.environ.get("GOSI_LOCAL_DIR", "").strip()
     if env and Path(env).is_dir():
         return Path(env)
+    # gosi 와 같은 '.local_dir'(키 폴더 경로 한 줄, git 제외) 파일: eiass/ 또는 옆 gosi/ 폴더
+    for pointer in (_ROOT / ".local_dir", _ROOT.parent / "gosi" / ".local_dir"):
+        try:
+            t = Path(pointer.read_text(encoding="utf-8").strip()) if pointer.is_file() else None
+        except OSError:
+            t = None
+        if t and t.is_dir():
+            return t
     for parent in _ROOT.parents:
         if (parent / "500_local").is_dir():
             return parent / "500_local"
