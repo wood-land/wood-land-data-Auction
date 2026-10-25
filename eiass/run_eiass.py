@@ -271,7 +271,7 @@ def main():
         st = state.get(r["biz_cd"], {}).get("status")
         if state.get(r["biz_cd"], {}).get("manual") and not a.codes:
             continue   # 손으로 맞춘 사업은 --codes 로 지정할 때만 다시 한다
-        if a.force or st is None or (st == "review" and a.retry_review) or st == "error" or (st == "skip" and a.retry_review):
+        if a.codes or a.force or st is None or (st == "review" and a.retry_review) or st == "error" or (st == "skip" and a.retry_review):
             todo.append(r)
     log(f"목록 {len(rows)}건, 처리할 사업 {len(todo)}건")
     summary = {"ok": 0, "review": 0, "skip": 0, "error": 0}
