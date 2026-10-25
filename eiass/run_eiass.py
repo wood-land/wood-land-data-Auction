@@ -158,89 +158,97 @@ def process(E, row, state, force=False):
     meta = {"biz_cd": cd, "biz_nm": d["biz_nm"] or row.get("biz_nm"), "biz_type": d["biz_type"] or row.get("biz_type"),
             "location": d["location"], "choan_period": d["choan_period"] or row.get("choan_period"), "extracted": TODAY}
     if not d["files"]:
-        return "skip", "평가서 파일 링크 없음(공람이 끝나면 비공개)", meta
+        return "skip", "평가서 파일 링크 없음(공람이 끝나면 비공개)", meta, None
     ov = find_overview(d["files"])
     if not ov:
-        return "skip", "'사업의 개요' 파일 없음", meta
+        return "review", "'사업의 개요' 파일을 못 찾음(파일 이름 확인 필요)", meta, "human"
     sid = E.streamdocs_id(ov["seq"], ov["name"])
     n = E.page_count(sid)
     pages, texts = figure_pages(E, sid, n)
     plan = site.parse_plan_area(texts)
     meta["plan_m2"] = plan
     log(f"  위치: {d['location']} | 계획면적 {plan} | 도면 후보 쪽 {pages}")
-    loc = vworld.locate(d["location"]) if vworld.available() else kakao.locate(d["location"], vworld.address_variants)
+    VW = vworld.available()
+    PC = "pc" if not VW else "human"   # 브이월드가 막힌 곳(Actions)의 좌표 맞춤 실패는 PC 에서 다시 해 볼 만하다
+    loc = vworld.locate(d["location"]) if VW else kakao.locate(d["location"], vworld.address_variants)
     if not loc:
-        return "review", "사업지위치 좌표 못 찾음", meta
+        return "review", "사업지위치 좌표 못 찾음", meta, PC
     lon, lat, how = loc
     log(f"  대략 위치 {lon:.5f},{lat:.5f} ({how})")
-    best_fail, first_img, first_e = None, None, None
+    fails, first_img = [], None          # (사유, 필요(pc|human), 그림, 경계)
     for p in pages:
         try:
             img = E.render(sid, p)
         except Exception as err:
             log(f"  쪽 {p} 그림 실패: {err}"); continue
-        e = ex.best_extract(img)
+        cands = ex.extract_candidates(img, max_n=3)
         if first_img is None:
-            first_img, first_e = img, e
-        if not e:
-            log(f"  쪽 {p}: 빨간 경계 못 찾음"); continue
-        kind, white, box = ex.background_kind(img, e["mask"])
-        s_est = math.sqrt(plan / e["area_px"]) if plan else None
-        log(f"  쪽 {p}: 경계 {len(e['contour'])}점 면적 {e['area_px']:.0f}px 추종 {e['red_frac']:.2f} 배경 {kind}(흰 {white:.2f}) px≈{s_est and round(s_est,3)}m")
-        if not s_est:
-            best_fail = best_fail or ("계획면적 모름", img, e); continue
-        half = max(1500.0, 2.5 * math.sqrt(plan))
-        try:
-            if kind == "line" and not vworld.available():
-                log("  선 도면은 연속지적도가 필요한데 이 환경에서 브이월드가 막힘 -> 국내 IP PC 에서 처리")
-                best_fail = best_fail or ("선 도면: 국내 IP PC(브이월드) 필요", img, e); continue
-            if kind == "aerial":
-                r = georef.sift_georef(img, ex.aerial_feature_mask(img, e["mask"], box), box, s_est, lon, lat, half, log)
-            else:
-                r = georef.chamfer_georef(ex.line_points(img, e["mask"], box), e["contour"], s_est, lon, lat, half, log)
-        except Exception as err:
-            log("  좌표 맞춤 오류:", err); traceback.print_exc()
-            best_fail = best_fail or (f"좌표 맞춤 오류 {err}", img, e); continue
-        if not r.get("ok"):
-            log("  좌표 맞춤 실패:", r.get("reason")); best_fail = best_fail or (r.get("reason"), img, e); continue
-        poly = to5186(r["A"], e["contour"])
-        ok, acc, why = judge(r, poly.area, plan)
-        stats = {k: v for k, v in r.items() if k in ("inliers", "matches", "rms_m", "scale_ratio", "spread", "rot_deg",
-                                                      "peak_ratio", "coincide", "local_max_m", "cost")}
-        log(f"  {r['method']}: {json.dumps(stats, ensure_ascii=False, default=float)} 면적 {poly.area:.0f}㎡ -> {'통과' if ok else '검토: ' + why}")
-        if not ok:
-            best_fail = (f"{r['method']} 품질검사: {why}", img, e); continue
-        if NOSAVE:
-            log(f"  [시험] eiass/_test/ 에 저장. 면적 {poly.area:.0f}㎡ 중심 {poly.centroid.x:.1f},{poly.centroid.y:.1f}(EPSG:5186)")
-        from pyproj import Transformer
-        from shapely.ops import transform
-        meta.update({"area_m2": round(poly.area, 1), "area_diff_pct": round((poly.area / plan - 1) * 100, 2),
-                     "accuracy_m": f"약 {acc:.0f}", "georef": f"자동 {r['method']}{'(' + r['imagery'] + ')' if r.get('imagery') else ''} {json.dumps(stats, ensure_ascii=False, default=lambda x: round(float(x), 3))}",
-                     "src": f"{ov['name']} {p + 1}쪽"})
-        store.write_project(cd, meta, transform(Transformer.from_crs(5186, 4326, always_xy=True).transform, poly))
-        if vworld.available():
-            rows = pnu_rows(poly, r.get("parcels")); how_pnu = "브이월드 연속지적도"
-        elif kakao.KEY:
-            rows, npts, stp = kakao.pnu_grid(poly); how_pnu = f"카카오 격자 {npts}점({stp:.0f}m)"
-        else:
-            rows, how_pnu = [], "PNU 생략(키 없음)"
-        store.write_parcels(cd, rows)
-        log(f"  PNU: {how_pnu}")
-        preview(poly, store.DATA / "preview" / f"{cd}.jpg")
-        for f in (store.DATA / "review").glob(f"{cd}.*"):
-            f.unlink()
-        log(f"  저장: 필지 {len(rows)}건 (편입 {sum(1 for x in rows if x['구분'].startswith('편입'))})")
-        if NOSAVE:
-            return "test", f"{r['method']} 시험 통과(_test 저장)", meta
-        return "ok", f"{r['method']} 정확도 약 {acc:.0f}m", meta
-    why, img, e = best_fail if best_fail else ("도면에서 경계를 못 찾음", first_img, first_e)
+            first_img = img
+        if not cands:
+            log(f"  쪽 {p}: 경계 못 찾음(빨강·자주·파랑·노랑·흰 선, 채색 면 모두)"); continue
+        for e in cands:
+          kind, white, box = ex.background_kind(img, e["mask"])
+          s_est = math.sqrt(plan / e["area_px"]) if plan else None
+          log(f"  쪽 {p} [{e['color']}]: 경계 {len(e['contour'])}점 면적 {e['area_px']:.0f}px 추종 {e['red_frac']:.2f} 배경 {kind}(흰 {white:.2f}) px≈{s_est and round(s_est,3)}m")
+          if not s_est:
+              fails.append(("계획면적을 평가서에서 못 읽음", "human", img, e)); continue
+          half = max(1500.0, 2.5 * math.sqrt(plan))
+          try:
+              if kind == "line" and not VW:
+                  log("  선 도면은 연속지적도가 필요한데 이 환경에서 브이월드가 막힘 -> 국내 IP PC 에서 처리")
+                  fails.append(("선 도면: 국내 IP PC(브이월드) 필요", "pc", img, e)); continue
+              if kind == "aerial":
+                  r = georef.sift_georef(img, ex.aerial_feature_mask(img, e["mask"], box), box, s_est, lon, lat, half, log)
+              else:
+                  r = georef.chamfer_georef(ex.line_points(img, e["mask"], box), e["contour"], s_est, lon, lat, half, log)
+          except Exception as err:
+              log("  좌표 맞춤 오류:", err); traceback.print_exc()
+              fails.append((f"좌표 맞춤 오류 {err}", PC, img, e)); continue
+          if not r.get("ok"):
+              log("  좌표 맞춤 실패:", r.get("reason")); fails.append((f"좌표 맞춤 실패: {r.get('reason')}", PC, img, e)); continue
+          poly = to5186(r["A"], e["contour"])
+          ok, acc, why = judge(r, poly.area, plan)
+          stats = {k: v for k, v in r.items() if k in ("inliers", "matches", "rms_m", "scale_ratio", "spread", "rot_deg",
+                                                        "peak_ratio", "coincide", "local_max_m", "cost")}
+          log(f"  {r['method']}: {json.dumps(stats, ensure_ascii=False, default=float)} 면적 {poly.area:.0f}㎡ -> {'통과' if ok else '검토: ' + why}")
+          if not ok:
+              fails.append((f"{r['method']} 품질검사 탈락: {why}", PC, img, e)); continue
+          if NOSAVE:
+              log(f"  [시험] eiass/_test/ 에 저장. 면적 {poly.area:.0f}㎡ 중심 {poly.centroid.x:.1f},{poly.centroid.y:.1f}(EPSG:5186)")
+          from pyproj import Transformer
+          from shapely.ops import transform
+          meta.update({"area_m2": round(poly.area, 1), "area_diff_pct": round((poly.area / plan - 1) * 100, 2),
+                       "accuracy_m": f"약 {acc:.0f}", "georef": f"자동 {r['method']}{'(' + r['imagery'] + ')' if r.get('imagery') else ''} {json.dumps(stats, ensure_ascii=False, default=lambda x: round(float(x), 3))}",
+                       "src": f"{ov['name']} {p + 1}쪽"})
+          store.write_project(cd, meta, transform(Transformer.from_crs(5186, 4326, always_xy=True).transform, poly))
+          if vworld.available():
+              rows = pnu_rows(poly, r.get("parcels")); how_pnu = "브이월드 연속지적도"
+          elif kakao.KEY:
+              rows, npts, stp = kakao.pnu_grid(poly); how_pnu = f"카카오 격자 {npts}점({stp:.0f}m)"
+          else:
+              rows, how_pnu = [], "PNU 생략(키 없음)"
+          store.write_parcels(cd, rows)
+          log(f"  PNU: {how_pnu}")
+          preview(poly, store.DATA / "preview" / f"{cd}.jpg")
+          for f in (store.DATA / "review").glob(f"{cd}.*"):
+              f.unlink()
+          log(f"  저장: 필지 {len(rows)}건 (편입 {sum(1 for x in rows if x['구분'].startswith('편입'))})")
+          if NOSAVE:
+              return "test", f"{r['method']} 시험 통과(_test 저장)", meta, None
+          return "ok", f"{r['method']}·{e['color']} 정확도 약 {acc:.0f}m", meta, None
+    if fails:
+        need = "pc" if any(f[1] == "pc" for f in fails) else "human"
+        why = "; ".join(dict.fromkeys(f[0] for f in fails))[:300]
+        img, e = next(((f[2], f[3]) for f in fails if f[1] == need), (fails[0][2], fails[0][3]))
+    else:
+        need, why, img, e = "human", "도면에서 사업지구 경계를 못 찾음", first_img, None
     if NOSAVE:
-        return "test", why, meta
+        return "test", f"[{need}] {why}", meta, need
     if img is not None:
         review_image(img, e, store.DATA / "review" / f"{cd}.jpg")
-    (store.DATA / "review" / f"{cd}.json").write_text(json.dumps({**meta, "reason": why, "pages": pages,
+    (store.DATA / "review" / f"{cd}.json").write_text(json.dumps({**meta, "reason": why, "need": need, "pages": pages,
                                                                  "file": ov["name"]}, ensure_ascii=False, indent=1), encoding="utf-8")
-    return "review", why, meta
+    return "review", why, meta, need
 
 
 def main():
@@ -271,27 +279,37 @@ def main():
         for pg in range(1, a.pages + 1):
             rows += E.list_page(pg)
     todo = []
+    if a.retry_review and not a.codes:
+        # 목록 쪽 밖으로 밀려난 PC 대기 사업도 다시(공람 중이면 파일이 열린다)
+        listed = {r["biz_cd"] for r in rows}
+        rows += [{"biz_cd": k, "biz_seq": v["biz_seq"], "biz_nm": v.get("biz_nm", "")} for k, v in state.items()
+                 if isinstance(v, dict) and v.get("status") == "review" and v.get("need") == "pc" and v.get("biz_seq") and k not in listed]
     for r in rows:
         st = state.get(r["biz_cd"], {}).get("status")
         if state.get(r["biz_cd"], {}).get("manual") and not a.codes:
             continue   # 손으로 맞춘 사업은 --codes 로 지정할 때만 다시 한다
-        if a.codes or a.force or st is None or (st == "review" and a.retry_review) or st == "error" or (st == "skip" and a.retry_review):
+        need = state.get(r["biz_cd"], {}).get("need")
+        retry = a.retry_review and (need != "human" or a.force)   # 사람 확인 대기는 기계가 다시 해도 같으므로 건너뛴다
+        if a.codes or a.force or st is None or (st == "review" and retry) or st == "error":
             todo.append(r)
     log(f"목록 {len(rows)}건, 처리할 사업 {len(todo)}건")
     summary = {"ok": 0, "review": 0, "skip": 0, "error": 0}
     t0 = time.time()
     for r in todo[:a.limit]:
         try:
-            status, note, meta = process(E, r, state, a.force)
+            status, note, meta, need = process(E, r, state, a.force)
         except Exception as err:
             traceback.print_exc()
-            status, note = "error", f"{type(err).__name__}: {err}"[:200]
+            status, note, meta, need = "error", f"{type(err).__name__}: {err}"[:200], {}, None
         if status == "test":
             log(f"  -> 시험: {note}"); continue
         if status != "ok" and state.get(r["biz_cd"], {}).get("status") == "ok":
             log("  (이전 결과가 있어 그대로 둔다)"); continue
+        prev = state.get(r["biz_cd"], {})
         state[r["biz_cd"]] = {"status": status, "note": note, "date": TODAY, "biz_seq": r["biz_seq"], "runner": RUNNER,
-                              "biz_nm": r.get("biz_nm", state.get(r["biz_cd"], {}).get("biz_nm", ""))}
+                              "need": need, "biz_nm": meta.get("biz_nm") or r.get("biz_nm") or prev.get("biz_nm", ""),
+                              "choan_period": meta.get("choan_period") or prev.get("choan_period", ""),
+                              "issue": prev.get("issue")}
         summary[status] = summary.get(status, 0) + 1
         store.save_state(state)
         log(f"  -> {status}: {note}")
@@ -299,12 +317,18 @@ def main():
             log("시간 제한으로 중단"); break
     n = store.rebuild_gpkg() if not NOSAVE else 0
     log(f"\n요약 {summary} / 레이어 사업지구 {n}건")
+    hum = [(k, v) for k, v in state.items() if v.get("status") == "review" and v.get("need") == "human"]
+    if hum:
+        log(f"\n※ 사람 확인이 필요한 사업 {len(hum)}건 (review/ 폴더, GitHub 이슈로도 알림):")
+        for k, v in hum:
+            log(f"   - {k} {v.get('biz_nm','')}: {v.get('note','')}")
     if "GITHUB_STEP_SUMMARY" in __import__("os").environ:
         with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fp:
             fp.write(f"### EIASS 초안공람 사업지구\n\n{summary}, 레이어 {n}건\n\n| 사업코드 | 결과 | 비고 |\n|---|---|---|\n")
             for r in todo[:a.limit]:
                 s = state.get(r["biz_cd"], {})
-                fp.write(f"| {r['biz_cd']} | {s.get('status')} | {s.get('note','')} |\n")
+                tag = {"pc": " (PC 대기)", "human": " (**사람 확인**)"}.get(s.get("need"), "")
+                fp.write(f"| {r['biz_cd']} | {s.get('status')}{tag} | {s.get('note','')} |\n")
     return 0
 
 
