@@ -27,6 +27,7 @@ from core import georef, kakao, site, store, vworld
 
 FIG_KEYS = [("토지이용계획", 3), ("항공사진", 2), ("중첩", 2), ("배치도", 1), ("지구계", 1)]
 TODAY = datetime.date.today().isoformat()
+NOSAVE = False
 RUNNER = "actions" if __import__("os").environ.get("GITHUB_ACTIONS") else (__import__("os").environ.get("GOSI_PC_NAME") or __import__("platform").node())
 
 
@@ -209,6 +210,9 @@ def process(E, row, state, force=False):
         log(f"  {r['method']}: {json.dumps(stats, ensure_ascii=False, default=float)} 면적 {poly.area:.0f}㎡ -> {'통과' if ok else '검토: ' + why}")
         if not ok:
             best_fail = (f"{r['method']} 품질검사: {why}", img, e); continue
+        if NOSAVE:
+            log(f"  [시험] 저장하지 않음. 면적 {poly.area:.0f}㎡ 중심 {poly.centroid.x:.1f},{poly.centroid.y:.1f}(EPSG:5186)")
+            return "test", f"{r['method']} 시험 통과", meta
         from pyproj import Transformer
         from shapely.ops import transform
         meta.update({"area_m2": round(poly.area, 1), "area_diff_pct": round((poly.area / plan - 1) * 100, 2),
@@ -229,6 +233,8 @@ def process(E, row, state, force=False):
         log(f"  저장: 필지 {len(rows)}건 (편입 {sum(1 for x in rows if x['구분']=='편입')})")
         return "ok", f"{r['method']} 정확도 약 {acc:.0f}m", meta
     why, img, e = best_fail if best_fail else ("도면에서 경계를 못 찾음", first_img, first_e)
+    if NOSAVE:
+        return "test", why, meta
     if img is not None:
         review_image(img, e, store.DATA / "review" / f"{cd}.jpg")
     (store.DATA / "review" / f"{cd}.json").write_text(json.dumps({**meta, "reason": why, "pages": pages,
@@ -243,7 +249,10 @@ def main():
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--retry-review", action="store_true")
     ap.add_argument("--limit", type=int, default=30)
+    ap.add_argument("--test", action="store_true", help="결과를 저장하지 않고 로그만(수동 결과와 비교용)")
     a = ap.parse_args()
+    global NOSAVE
+    NOSAVE = a.test
     log(f"브이월드 {'사용 가능' if vworld.available() else '막힘(위성영상 Esri, 위치·PNU 카카오로 대신)'} / 카카오 키 {'있음' if kakao.KEY else '없음'}")
     if not vworld.available() and not kakao.KEY:
         log("::error::브이월드도 막히고 KAKAO_REST_API_KEY 도 없음"); return 2
@@ -273,6 +282,8 @@ def main():
         except Exception as err:
             traceback.print_exc()
             status, note = "error", f"{type(err).__name__}: {err}"[:200]
+        if status == "test":
+            log(f"  -> 시험: {note}"); continue
         if status != "ok" and state.get(r["biz_cd"], {}).get("status") == "ok":
             log("  (이전 결과가 있어 그대로 둔다)"); continue
         state[r["biz_cd"]] = {"status": status, "note": note, "date": TODAY, "biz_seq": r["biz_seq"], "runner": RUNNER,
