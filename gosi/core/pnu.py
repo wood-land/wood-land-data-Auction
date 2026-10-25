@@ -20,7 +20,7 @@ import requests
 
 from core.local_dir import find_dirs
 
-RESOLVER_VERSION = 6  # 변환 규칙을 고칠 때 올린다 -> 이전 실패분(parcels_unresolved)을 한 번 전부 다시 시도
+RESOLVER_VERSION = 7  # 7(2026-10-26): 면 빠진 리·읍면 오기재·시군 첫 글자 빠진 주소 보완(실패 캐시 라벨도 v4 로 올림) / 변환 규칙을 고칠 때 올린다 -> 이전 실패분(parcels_unresolved)을 한 번 전부 다시 시도
 KAKAO_URL = "https://dapi.kakao.com/v2/local/search/address.json"
 
 SIDO_FULL = {
@@ -84,7 +84,7 @@ def build_query(sojaeji, jibun):
 
 
 _ALIAS_FILE = Path(__file__).with_name("place_aliases.json")  # 사용자가 확인한 지명 바로잡기: {"지자체": {"잘못 읽힌 이름": "정상 이름"}}
-_NOT_PARCEL_RE = re.compile(r"합\s*계|소\s*계|\(\s*\d+\s*필지\s*\)|필지\s*\)|(?:로|일|월|년)\s*부터|^\s*\d+\s*$")
+_NOT_PARCEL_RE = re.compile(r"합\s*계|소\s*계|\(\s*\d+\s*필지\s*\)|필지\s*\)|(?:로|일|월|년)\s*부터|^\s*\d+\s*$|사\s*용\s*기\s*간|평점산식|입찰가격")
 
 
 def load_aliases():
@@ -100,6 +100,21 @@ def apply_aliases(sojaeji, city):
     if not table:
         return sojaeji
     return " ".join(table.get(w, w) for w in (sojaeji or "").split())
+
+
+def repair_concat_sigun(sojaeji, context):
+    """'경상북도 안동시 택시안중읍 학현리'처럼 시군 이름의 첫 글자가 빠진 채 읍·면에 붙은 단어('택시안중읍' = 평택시 안중읍)를
+    게시글 제목·사업명(context)에 나온 이름('평택')으로 되살려 '평택시 안중읍 학현리' 로 바꾼다. 후보가 하나일 때만 고친다."""
+    words = (sojaeji or "").split()
+    for i, w in enumerate(words):
+        m = re.fullmatch(r"([가-힣]{1,3}[시군])([가-힣]{2,3}[읍면])", w)
+        if not m:
+            continue
+        pre = m.group(1)[:-1]
+        hits = {c for c in re.findall(r"[가-힣]{2,4}", context or "") if c.endswith(pre) and len(c) > len(pre)}
+        if len(hits) == 1:
+            return " ".join([hits.pop() + m.group(1)[-1], m.group(2)] + words[i + 1:])
+    return sojaeji
 
 
 def looks_like_non_parcel(sojaeji):
@@ -195,6 +210,10 @@ class PnuResolver:
         읍/면 + 리(또는 리/동만)를 채워 질의한다. 소재지 끝에 지번이 붙어 있어도 떼고 본다."""
         base = re.sub(r"(?:\s+산?\s*\d+(?:-\d+)?)+$", "", (sojaeji or "").strip())  # '하빈 무등 1238 1238-2'(분할 전·후 지번이 붙음) -> '하빈 무등'
         words = base.split()
+        if words and re.search(r"(특별시|광역시|특별자치시|특별자치도|도)$", words[0]):
+            words = words[1:]  # '충청북도 단양군 당동' 처럼 시도·시군구가 이미 앞에 붙은 축약형(면이 빠진 리)
+        if words and city and words[0] == city:
+            words = words[1:]
         if not (1 <= len(words) <= 2) or not city or not city.endswith(("시", "군", "구")) or not want:
             return None
         if not all(re.fullmatch(r"[가-힣]{1,5}", w) for w in words):
@@ -202,9 +221,12 @@ class PnuResolver:
         tail = f"{'산' if want[0] else ''}{want[1]}" + (f"-{want[2]}" if want[2] else "")
         if len(words) == 1:
             a = words[0]
-            if a[-1] in "읍면동리":
+            if a[-1] in "읍면리":
                 return None
-            queries = [f"{city} {a}리 {tail}", f"{city} {a}동 {tail}"]
+            if a[-1] == "동":  # '당동'(실제 당동리): 동으로 읽은 질의는 본 질의가 이미 했으므로 리 접미사만 더 시도한다
+                queries = [f"{city} {a}리 {tail}"]
+            else:
+                queries = [f"{city} {a}리 {tail}", f"{city} {a}동 {tail}"]
         else:
             a, b = words
             if b.endswith("리") or a[-1] in "읍면동":
@@ -227,12 +249,13 @@ class PnuResolver:
         1차: 소재지+지번 그대로. 실패하면 2차: 읍면동·리·지번만으로 전국 검색해 지번이 일치하고 후보가 하나로 정해질 때만 인정
         (여러 지역에 같은 이름이 있으면 context(게시글 제목 등)에 나오는 시도·시군구로 가린다)."""
         sojaeji = apply_aliases(sojaeji, city)  # 사용자가 확인한 지명 바로잡기(place_aliases.json)
+        sojaeji = re.sub(r"(?<=[가-힣])\d(?=동(?:\s|$))", "", sojaeji or "")  # 행정동 번호('남산3동')는 법정동('남산동')에 없다
         query = build_query(sojaeji, jibun)
         if not query:
             self.stats["fail"] += 1
             return None
         row = self.con.execute("SELECT pnu, status, full FROM cache.pnu_cache WHERE query=?", (query,)).fetchone()
-        if row and (row[0] and row[2] or row[1] == "no_match_v3"):  # 예전 실패 캐시(no_match)·정식 주소 없는 캐시는 다시 시도한다
+        if row and (row[0] and row[2] or row[1] == "no_match_v4"):  # 예전 실패 캐시(no_match)·정식 주소 없는 캐시는 다시 시도한다
             self.stats["hit_cache"] += 1
             self.stats["ok" if row[0] else "fail"] += 1
             self.last_full = row[2] or ""
@@ -246,12 +269,23 @@ class PnuResolver:
         if state != "ok":
             self.stats["fail"] += 1
             return None  # 일시 오류는 캐시하지 않아 다음 실행에서 재시도
-        pnu, status, full = None, "no_match_v3", ""
+        pnu, status, full = None, "no_match_v4", ""
         for d in data.get("documents", []):
             m = self._match(d, want)
             if m:
                 pnu, status, full = m[0], "ok", m[3]
                 break
+        if not pnu:
+            fixed = repair_concat_sigun(sojaeji, context)  # '택시안중읍'(실제 평택시 안중읍): 글자가 붙고 빠진 시군을 제목으로 되살린다
+            if fixed != sojaeji:
+                data_f, state_f = self._call(build_query(fixed, jibun))
+                self.stats["api"] += 1
+                if state_f == "ok":
+                    for d in data_f.get("documents", []):
+                        m = self._match(d, want)
+                        if m:
+                            pnu, status, full = m[0], "ok_repair", m[3]
+                            break
         if not pnu:
             pnu = self._abbrev_lookup(sojaeji, jibun, city, want)
             if pnu:
@@ -270,8 +304,9 @@ class PnuResolver:
                     if m:
                         cands[m[0]] = m
                 if len(cands) > 1:  # 같은 읍면·리 이름이 여러 곳 -> 제목/문맥에 나온 지역으로 가린다
+                    ctx = f"{context} {city or ''}"  # 제목에 지역이 없어도 수집한 지자체(city)로 가린다('의정부동' 이 여러 곳일 때)
                     hit = [m for m in cands.values()
-                           if any(x and re.sub(r"(특별자치시|특별자치도|광역시|특별시|도|시|군|구)$", "", x) in context
+                           if any(x and re.sub(r"(특별자치시|특별자치도|광역시|특별시|도|시|군|구)$", "", x) in ctx
                                   for x in m[1:3])]
                     cands = {m[0]: m for m in hit} if len(hit) == 1 else {}
                 if len(cands) == 1:
@@ -281,6 +316,10 @@ class PnuResolver:
             pnu = self._swap_eupmyeon(sojaeji, jibun, want)  # 읍·면 승격/개편으로 문서의 이름과 지금 이름이 다른 경우
             if pnu:
                 status, full = "ok_swap", self.last_full
+        if not pnu:
+            pnu = self._ri_only_lookup(sojaeji, jibun, city, want)  # 읍·면이 틀리게 적힌 경우(시군 + 리 + 지번이 유일하게 맞을 때)
+            if pnu:
+                status, full = "ok_ri_only", self.last_full
         if not pnu and want and not want[0] and re.match(r"임", (jimok or "").strip()):
             # 지목이 임야(문서에 적힘)인데 지번에 '산'이 없다: 임야 대장 지번은 '산' 번호라 '산'을 붙여 다시 찾는다(카카오가 지번 일치를 확인)
             pnu = self.resolve(sojaeji, f"산{want[1]}" + (f"-{want[2]}" if want[2] else ""), context, city)
@@ -291,6 +330,34 @@ class PnuResolver:
         self.con.commit()
         self.stats["ok" if pnu else "fail"] += 1
         return pnu
+
+    def _ri_only_lookup(self, sojaeji, jibun, city, want):
+        """'공도읍 개정리'처럼 읍·면이 틀리게 적혔지만(실제 미양면 개정리) 시군 + 리 + 지번이 맞는 경우: 읍·면을 빼고 질의해
+        리 이름과 지번(본번·부번·산)이 정확히 같은 후보가 단 하나일 때만 인정한다(같은 이름의 리가 여럿이면 포기)."""
+        if not want:
+            return None
+        words = (sojaeji or "").split()
+        ri = next((w for w in reversed(words) if re.fullmatch(r"[가-힣0-9]{1,6}리", w)), None)
+        sigun = next((w for w in words if re.fullmatch(r"[가-힣]{1,5}[시군]", w)), None) or (city if city and city.endswith(("시", "군")) else None)
+        if not ri or not sigun:
+            return None
+        tail = f"{'산' if want[0] else ''}{want[1]}" + (f"-{want[2]}" if want[2] else "")
+        data, state = self._call(f"{sigun} {ri} {tail}")
+        self.stats["api"] += 1
+        if state != "ok":
+            return None
+        stem = re.sub(r"(시|군)$", "", sigun)
+        cands = {}
+        for d in data.get("documents", []):
+            m = self._match(d, want)
+            a = d.get("address") or {}
+            if m and stem in m[2] and (a.get("region_3depth_name") or "").endswith(ri):
+                cands[m[0]] = m
+        if len(cands) == 1:
+            m = next(iter(cands.values()))
+            self.last_full = m[3]
+            return m[0]
+        return None
 
     def _swap_eupmyeon(self, sojaeji, jibun, want):
         """'일로면 망월리'처럼 읍·면만 바뀐 이름(면이 읍으로 승격된 경우 등)을 서로 바꿔 질의한다.
@@ -352,6 +419,35 @@ class PnuResolver:
                 return f"{code}{'2' if want[0] else '1'}{want[1]:04d}{want[2]:04d}"
         return None
 
+    def _ri_code_bare(self, sojaeji, jibun, city):
+        """접미사가 빠진 리 이름('당동'=당동리, '양촌 임화'=양촌면 임화리)은 리 단위 질의를 못 만들어 리 코드 조립이 건너뛰어졌다.
+        지자체(시·군) 이름을 앞에 붙이고 리·면 접미사를 채워 리 코드 조립(_from_ri_code)을 다시 시도한다. 리가 하나로 정해질 때만 인정."""
+        if not city or not city.endswith(("시", "군")) or not parse_jibun(jibun):
+            return None
+        base = re.sub(r"\s*(산)?\s*\d+(?:-\d+)?$", "", (sojaeji or "").strip())
+        words = base.split()
+        if words and re.search(r"(특별시|광역시|특별자치시|특별자치도|도)$", words[0]):
+            words = words[1:]
+        if words and words[0] == city:
+            words = words[1:]
+        if not words or len(words) > 2 or not all(re.fullmatch(r"[가-힣]{1,5}", w) for w in words):
+            return None
+        if len(words) == 1:
+            a = words[0]
+            if a[-1] in "읍면리":
+                return None
+            variants = [f"{city} {a}리"]
+        else:
+            a, b = words
+            if b.endswith("리") or a[-1] in "읍면동":
+                return None
+            variants = [f"{city} {a}{es} {b}리" for es in ("면", "읍")]
+        for v in variants:
+            pnu = self._from_ri_code(v, jibun, city)
+            if pnu:
+                return pnu
+        return None
+
     def resolve_full(self, sojaeji, jibun, context="", city="", title="", project="", jimok=""):
         """-> (PNU 또는 None, 사유). 사유: ok / ok_ai / ok_ri(리 코드로 직접 조립, 지번 존재 미확인) / no_jibun / no_region(소재지 없음) / no_key / transient / no_match.
         규칙 변환이 모두 실패하면 DeepSeek 보정을 한 번 시도한다(카카오 검증을 통과한 것만 인정)."""
@@ -379,7 +475,7 @@ class PnuResolver:
                 return pnu, "ok_ai"
             if self._transient:
                 return None, "transient"
-        pnu = self._from_ri_code(sojaeji, jibun, city)
+        pnu = self._from_ri_code(sojaeji, jibun, city) or self._ri_code_bare(sojaeji, jibun, city)
         if pnu:
             self.con.execute("INSERT OR REPLACE INTO cache.pnu_cache VALUES (?,?,?,datetime('now'),?)",
                              (build_query(sojaeji, jibun), pnu, "ok_ri", self.last_full))
