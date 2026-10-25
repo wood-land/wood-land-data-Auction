@@ -235,6 +235,28 @@ class BlockedSites(unittest.TestCase):
         self.assertFalse(should_run("only", "강원", "원주시"))  # 막힌 곳이 없는 지역은 'only' 에서 할 일이 없다
 
 
+class MetroDistrictExcluded(unittest.TestCase):
+    def test_metro_districts_are_never_candidates(self):
+        from core.blocked_sites import is_metro_district
+        self.assertTrue(is_metro_district("부산", "수영구"))
+        self.assertTrue(is_metro_district("인천", "계양구"))
+        self.assertTrue(is_metro_district("부산", "기장군"))
+        self.assertFalse(is_metro_district("대구", "대구광역시청"))
+        self.assertFalse(is_metro_district("경기", "여주시"))
+        self.assertFalse(is_metro_district("경남", "합천군"))  # 도 소속 군은 대상
+
+
+class ExcludedDistricts(unittest.TestCase):
+    def test_seoul_busan_incheon_districts_are_never_candidates(self):
+        from core.blocked_sites import is_excluded_district
+        self.assertTrue(is_excluded_district("부산", "수영구"))
+        self.assertTrue(is_excluded_district("인천", "계양구"))
+        self.assertTrue(is_excluded_district("부산", "기장군"))
+        self.assertFalse(is_excluded_district("부산", "부산광역시청"))
+        self.assertFalse(is_excluded_district("대구", "달성군"))  # 대구·대전·광주·울산·세종은 일반 후보
+        self.assertFalse(is_excluded_district("경기", "여주시"))
+
+
 class DetectBlocked(unittest.TestCase):
     """수집 로그(구글시트)로 Actions 가 반복해서 막히는 지자체를 찾는 규칙(detect_blocked.py)과 자동 등록 목록."""
     TODAY = __import__("datetime").date(2026, 10, 20)

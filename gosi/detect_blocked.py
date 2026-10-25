@@ -195,6 +195,10 @@ def run(apply=False, confirm=None, log=print):
         return []
     already = {(r, c) for r, cs in B.all_blocked().items() for c in cs}
     cands = {k: v for k, v in find_candidates(tabs).items() if k not in already}
+    for key in [k for k in cands if B.is_excluded_district(*k)]:
+        del cands[key]  # 서울·부산·인천 자치구는 후보에서 영구 제외(묻지도 않는다)
+    for key in [k for k in cands if B.is_metro_district(*k)]:
+        del cands[key]  # 광역시 자치구는 후보에서 영구 제외(묻지도 않는다)
     if not cands:
         log(f"[막힌 지자체 찾기] 새 후보 없음(최근 {WINDOW_DAYS}일 로그, 서로 다른 {MIN_FAIL_DAYS}일 이상 실패 + 정상 기록 없음 기준)")
         return []

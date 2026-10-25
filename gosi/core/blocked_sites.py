@@ -38,6 +38,24 @@ BLOCKED_ON_HOSTED = {
     "충남": ["아산시"],  # 첨부 서버 SSL 오류 7회(러너), PC 정상
 }
 
+# 특별시·광역시 자치구·군은 PC 전용 후보로 올리지 않는다(사용자 지시 2026-10-25, law.md 1-1: 자치구는 신규 추가 금지).
+# 본청(예: 대구광역시청)은 '구·군' 으로 끝나지 않으므로 해당하지 않는다.
+METRO_MODULES = ("서울", "부산", "대구", "인천", "광주", "대전", "울산")
+
+
+def is_metro_district(region, city):
+    return region in METRO_MODULES and city.endswith(("구", "군"))
+
+
+# 서울·부산·인천의 자치구·군은 PC 전용 후보로 올리지 않는다(사용자 지시 2026-10-25). 대구·대전·광주·울산·세종은 일반 지자체처럼 후보가 될 수 있다.
+# 본청(예: 부산광역시청)은 '구·군' 으로 끝나지 않으므로 해당하지 않는다.
+EXCLUDED_DISTRICT_MODULES = ("서울", "부산", "인천")
+
+
+def is_excluded_district(region, city):
+    return region in EXCLUDED_DISTRICT_MODULES and city.endswith(("구", "군"))
+
+
 AUTO_FILE = Path(__file__).with_name("blocked_sites_auto.json")  # detect_blocked.py 가 등록: {지역: {지자체: {"since", "evidence"}}}
 
 
