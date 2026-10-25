@@ -1,0 +1,10 @@
+requests
+beautifulsoup4
+numpy
+scipy
+opencv-python-headless>=4.8
+shapely>=2.0
+pyproj
+geopandas
+pyogrio
+pandas
