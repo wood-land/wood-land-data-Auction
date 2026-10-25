@@ -1,0 +1,20 @@
+{
+ "경기": {
+  "여주시": {
+   "since": "2026-10-25",
+   "evidence": "Actions 접속 오류 2일, PC 에서는 열림 - ConnectTimeout: HTTPSConnectionPool(host='www.yeoj"
+  }
+ },
+ "부산": {
+  "수영구": {
+   "since": "2026-10-25",
+   "evidence": "Actions 접속 오류 2일, PC 에서는 열림 - ConnectionError: ('Connection aborted.', RemoteDis"
+  }
+ },
+ "인천": {
+  "계양구": {
+   "since": "2026-10-25",
+   "evidence": "Actions 접속 오류 2일, PC 에서는 열림 - ConnectTimeout: HTTPSConnectionPool(host='www.gyey"
+  }
+ }
+}
