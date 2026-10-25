@@ -116,7 +116,7 @@ class RunAll(unittest.TestCase):
             return 3 if Path(cwd).name == "gosi" else 0
 
         with mock.patch.object(A.pc_common, "ensure_pc_name", return_value="PCwj"),              mock.patch.object(A.subprocess, "call", side_effect=fake_call):
-            rc = A.main(["--no-git"])
+            rc = A.main(["--no-git", "--no-venv"])
         self.assertEqual(rc, 1)
         self.assertEqual([c[0] for c in calls], ["gosi", "eiass"])
         self.assertTrue(all(c[2] == "PCwj" for c in calls))
@@ -124,10 +124,37 @@ class RunAll(unittest.TestCase):
     def test_requirements_installed_before_each_job(self):
         calls = []
         with mock.patch.object(A.pc_common, "ensure_pc_name", return_value="PCwj"),              mock.patch.object(A.subprocess, "call", side_effect=lambda cmd, cwd=None, env=None: calls.append(cmd) or 0):
-            A.main(["--no-git"])
+            A.main(["--no-git", "--no-venv"])
         pips = [c for c in calls if "pip" in c]
         self.assertEqual(len(pips), 2)  # gosi, eiass 각각 requirements.txt
         self.assertTrue(all(c[-1].endswith("requirements.txt") for c in pips))
+
+    def test_jobs_run_with_venv_python(self):
+        calls = []
+        fake_py = Path("venv") / "python.exe"
+        with mock.patch.object(A.pc_common, "ensure_pc_name", return_value="PCwj"),              mock.patch.object(A, "ensure_venv", return_value=fake_py),              mock.patch.object(A.subprocess, "call", side_effect=lambda cmd, cwd=None, env=None: calls.append(cmd) or 0):
+            A.main(["--no-git"])
+        self.assertTrue(all(c[0] == str(fake_py) for c in calls))  # 설치도 작업도 전용 가상환경의 파이썬으로
+        self.assertEqual(len(calls), 4)
+
+    def test_ensure_venv_creates_once_and_falls_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            venv = Path(d) / "v"
+            py = venv / "python.exe"
+            made = []
+
+            def create(cmd, **kw):
+                made.append(cmd)
+                py.parent.mkdir(parents=True, exist_ok=True)
+                py.write_text("")
+                return 0
+
+            with mock.patch.object(A, "VENV", venv), mock.patch.object(A, "venv_python", return_value=py),                  mock.patch.object(A.subprocess, "call", side_effect=create):
+                self.assertEqual(A.ensure_venv(), py)
+                self.assertEqual(A.ensure_venv(), py)  # 두 번째는 만들지 않는다
+            self.assertEqual(len(made), 1)
+            with mock.patch.object(A, "VENV", Path(d) / "x"), mock.patch.object(A, "venv_python", return_value=Path(d) / "x" / "py.exe"),                  mock.patch.object(A.subprocess, "call", return_value=1):
+                self.assertEqual(A.ensure_venv(), Path(sys.executable))
 
     def test_stops_without_pc_name(self):
         with mock.patch.object(A.pc_common, "ensure_pc_name", return_value=""):
