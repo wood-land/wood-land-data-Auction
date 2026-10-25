@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 
 from core import extract as ex
-from core import georef, site, store, vworld
+from core import georef, kakao, site, store, vworld
 
 FIG_KEYS = [("토지이용계획", 3), ("항공사진", 2), ("중첩", 2), ("배치도", 1), ("지구계", 1)]
 TODAY = datetime.date.today().isoformat()
@@ -164,7 +164,7 @@ def process(E, row, state, force=False):
     plan = site.parse_plan_area(texts)
     meta["plan_m2"] = plan
     log(f"  위치: {d['location']} | 계획면적 {plan} | 도면 후보 쪽 {pages}")
-    loc = vworld.locate(d["location"])
+    loc = vworld.locate(d["location"]) if vworld.available() else kakao.locate(d["location"], vworld.address_variants)
     if not loc:
         return "review", "사업지위치 좌표 못 찾음", meta
     lon, lat, how = loc
@@ -187,6 +187,9 @@ def process(E, row, state, force=False):
             best_fail = best_fail or ("계획면적 모름", img, e); continue
         half = max(1500.0, 2.5 * math.sqrt(plan))
         try:
+            if kind == "line" and not vworld.available():
+                log("  선 도면은 연속지적도가 필요한데 이 환경에서 브이월드가 막힘 -> 국내 IP PC 에서 처리")
+                best_fail = best_fail or ("선 도면: 국내 IP PC(브이월드) 필요", img, e); continue
             if kind == "aerial":
                 r = georef.sift_georef(img, ex.aerial_feature_mask(img, e["mask"], box), box, s_est, lon, lat, half, log)
             else:
@@ -206,11 +209,17 @@ def process(E, row, state, force=False):
         from pyproj import Transformer
         from shapely.ops import transform
         meta.update({"area_m2": round(poly.area, 1), "area_diff_pct": round((poly.area / plan - 1) * 100, 2),
-                     "accuracy_m": f"약 {acc:.0f}", "georef": f"자동 {r['method']} {json.dumps(stats, ensure_ascii=False, default=lambda x: round(float(x), 3))}",
+                     "accuracy_m": f"약 {acc:.0f}", "georef": f"자동 {r['method']}{'(' + r['imagery'] + ')' if r.get('imagery') else ''} {json.dumps(stats, ensure_ascii=False, default=lambda x: round(float(x), 3))}",
                      "src": f"{ov['name']} {p + 1}쪽"})
         store.write_project(cd, meta, transform(Transformer.from_crs(5186, 4326, always_xy=True).transform, poly))
-        rows = pnu_rows(poly, r.get("parcels"))
+        if vworld.available():
+            rows = pnu_rows(poly, r.get("parcels")); how_pnu = "브이월드 연속지적도"
+        elif kakao.KEY:
+            rows, npts, stp = kakao.pnu_grid(poly); how_pnu = f"카카오 격자 {npts}점({stp:.0f}m)"
+        else:
+            rows, how_pnu = [], "PNU 생략(키 없음)"
         store.write_parcels(cd, rows)
+        log(f"  PNU: {how_pnu}")
         preview(poly, store.DATA / "preview" / f"{cd}.jpg")
         for f in (store.DATA / "review").glob(f"{cd}.*"):
             f.unlink()
@@ -232,8 +241,9 @@ def main():
     ap.add_argument("--retry-review", action="store_true")
     ap.add_argument("--limit", type=int, default=30)
     a = ap.parse_args()
-    if not vworld.KEY:
-        log("::error::VWORLD_API_KEY 없음"); return 2
+    log(f"브이월드 {'사용 가능' if vworld.available() else '막힘(위성영상 Esri, 위치·PNU 카카오로 대신)'} / 카카오 키 {'있음' if kakao.KEY else '없음'}")
+    if not vworld.available() and not kakao.KEY:
+        log("::error::브이월드도 막히고 KAKAO_REST_API_KEY 도 없음"); return 2
     store.ensure_dirs()
     state = store.load_state()
     store.seed_from_gpkg(state)

@@ -7,7 +7,7 @@ import time
 
 import requests
 
-from core import site, vworld
+from core import kakao, site, vworld
 
 
 def step(name, fn):
@@ -41,6 +41,13 @@ def main():
         r = vworld.S.get(url, timeout=20); return f"HTTP {r.status_code} {r.headers.get('content-type')} {len(r.content)}B"
     ok["vw_wmts"] = step("브이월드 위성 타일", tile)
     ok["vw_data"] = step("브이월드 연속지적도(data API)", lambda: f"{len(vworld.parcels_bbox(127.884, 37.376, 127.888, 37.380))}필지")
+    def esri():
+        r = requests.get("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/15/12712/28024", timeout=20)
+        return f"HTTP {r.status_code} {r.headers.get('content-type')} {len(r.content)}B"
+    ok["esri"] = step("Esri 위성 타일(브이월드 대체)", esri)
+    print("KAKAO_REST_API_KEY:", "있음" if kakao.KEY else "없음")
+    ok["kakao"] = step("카카오 주소->좌표", lambda: kakao.geocode("강원특별자치도 원주시 지정면 신평리 산57"))
+    print("브이월드 사용 가능:", vworld.available())
     bad = [k for k, v in ok.items() if not v]
     print("결과:", "모두 정상" if not bad else "실패 " + ", ".join(bad))
     return 0
