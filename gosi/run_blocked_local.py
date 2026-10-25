@@ -1,5 +1,5 @@
 """
-run_blocked_local.py - PC 를 켤 때마다 실행('★PC수집_막힌지자체_더블클릭_v….bat' 더블클릭): 국내 IP 에서만 읽히는 게시판을 수집해 올린다.
+run_blocked_local.py - PC 를 켤 때마다 실행('★PC수집_전체_더블클릭_v….bat'(저장소 최상위, 환경영향평가와 함께) 더블클릭 또는 이 파일만 실행): 국내 IP 에서만 읽히는 게시판을 수집해 올린다.
 
 GitHub 호스티드 러너(미국 IP)에서는 core/blocked_sites.py 의 게시판이 막혀서(history/15 7절), 그곳만 이 PC 에서 수집한다.
   1) git pull(코드·DB 두 저장소)  2) 로그 분석으로 새로 막힌 지자체 등록  3) 막힌 게시판만 수집(run_scheduled.py --blocked only)

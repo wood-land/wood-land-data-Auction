@@ -9,7 +9,7 @@ core/blocked_sites.py - GitHub 호스티드 러너(미국 Azure IP)에서 재현
 
 이 게시판은 국내 IP 에서 도는 PC 에서만 수집한다:
   - GitHub Actions(호스티드 러너)는 `run_scheduled.py --blocked skip` 으로 이 목록을 건너뛴다(워크플로에 이미 적용).
-  - PC 는 `★PC수집_막힌지자체_더블클릭_v….bat`(251_gosi-gongo-crawle 폴더)을 더블클릭하면 `--blocked only` 로 이 목록만 수집한다.
+  - PC 는 `★PC수집_전체_더블클릭_v….bat`(저장소 최상위; 고시공고만: gosi/run_blocked_local.py)을 더블클릭하면 `--blocked only` 로 이 목록만 수집한다.
   - 직접 실행: python run_scheduled.py --region 경북 --blocked only --db data/국내IP_경북.sqlite   (기본 all = 구분 없이 전부)
 
 **새로 막히는 지자체**(아직 모든 시군구를 시도한 게 아니라 계속 생길 수 있다)는 두 가지로 들어간다:

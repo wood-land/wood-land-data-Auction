@@ -10,7 +10,7 @@
 ## 동작
 - GitHub Actions(`.github/workflows/collect-gosigongo.yml`)가 매일 06:30 KST 에 돌아 지역마다 3일에 한 번 수집하고, 결과를 비공개 DB 저장소에 커밋한다(Secret `GOSI_DB_TOKEN`).
 - 필요한 Secret: `KAKAO_REST_API_KEY`, `DEEPSEEK_API_KEY`(선택), `GOOGLE_CREDENTIALS_EDITER` + `GOOGLE_SHEET_ID`(선택, 수집 로그 시트), `GOSI_DB_TOKEN`.
-- 미국 IP(Actions)에서 막히는 게시판은 국내 IP PC 에서 `★PC수집_막힌지자체_더블클릭_v….bat` 로 수집한다(`core/blocked_sites.py`).
+- 미국 IP(Actions)에서 막히는 게시판은 국내 IP PC 에서 `★PC수집_전체_더블클릭_v….bat`(저장소 최상위; 고시공고만: gosi/run_blocked_local.py) 로 수집한다(`core/blocked_sites.py`).
 - 자세한 내용은 `README_스케줄.md` 참고.
 
 ## 폴더 구성 (PC)

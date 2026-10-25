@@ -89,7 +89,7 @@ def main():
     if pend:
         pend.sort()
         body = ("국내 IP PC 에서 처리해야 하는 사업(선 도면 등) 중 **공람 마감이 5일 이내**인 것이 있습니다.\n"
-                "PC 에서 `eiass/★PC_환경영향평가_더블클릭_v….bat` 을 실행해 주세요. 마감이 지나면 평가서를 볼 수 없습니다.\n\n"
+                "PC 에서 `★PC수집_전체_더블클릭_v….bat`(저장소 최상위) 을 실행해 주세요. 마감이 지나면 평가서를 볼 수 없습니다.\n\n"
                 "| 공람 마감 | 사업코드 | 사업명 |\n|---|---|---|\n" +
                 "".join(f"| {e.isoformat()} | `{cd}` | {v.get('biz_nm','')} |\n" for e, cd, v in pend))
         if meta.get("issue"):
