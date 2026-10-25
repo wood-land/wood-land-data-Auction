@@ -211,8 +211,7 @@ def process(E, row, state, force=False):
         if not ok:
             best_fail = (f"{r['method']} 품질검사: {why}", img, e); continue
         if NOSAVE:
-            log(f"  [시험] 저장하지 않음. 면적 {poly.area:.0f}㎡ 중심 {poly.centroid.x:.1f},{poly.centroid.y:.1f}(EPSG:5186)")
-            return "test", f"{r['method']} 시험 통과", meta
+            log(f"  [시험] eiass/_test/ 에 저장. 면적 {poly.area:.0f}㎡ 중심 {poly.centroid.x:.1f},{poly.centroid.y:.1f}(EPSG:5186)")
         from pyproj import Transformer
         from shapely.ops import transform
         meta.update({"area_m2": round(poly.area, 1), "area_diff_pct": round((poly.area / plan - 1) * 100, 2),
@@ -230,7 +229,9 @@ def process(E, row, state, force=False):
         preview(poly, store.DATA / "preview" / f"{cd}.jpg")
         for f in (store.DATA / "review").glob(f"{cd}.*"):
             f.unlink()
-        log(f"  저장: 필지 {len(rows)}건 (편입 {sum(1 for x in rows if x['구분']=='편입')})")
+        log(f"  저장: 필지 {len(rows)}건 (편입 {sum(1 for x in rows if x['구분'].startswith('편입'))})")
+        if NOSAVE:
+            return "test", f"{r['method']} 시험 통과(_test 저장)", meta
         return "ok", f"{r['method']} 정확도 약 {acc:.0f}m", meta
     why, img, e = best_fail if best_fail else ("도면에서 경계를 못 찾음", first_img, first_e)
     if NOSAVE:
@@ -259,6 +260,9 @@ def main():
     store.ensure_dirs()
     state = store.load_state()
     store.seed_from_gpkg(state)
+    if NOSAVE:   # 시험: 결과는 eiass/_test/ 에만(본 레이어·state 는 건드리지 않는다)
+        store.DATA = store.DATA / "_test"
+        store.ensure_dirs()
     E = site.Eiass()
     if a.codes:
         rows = [{"biz_cd": c.split(":")[0], "biz_seq": c.split(":")[1]} for c in a.codes.split(",") if ":" in c]
@@ -293,7 +297,7 @@ def main():
         log(f"  -> {status}: {note}")
         if time.time() - t0 > 3 * 3600:
             log("시간 제한으로 중단"); break
-    n = store.rebuild_gpkg()
+    n = store.rebuild_gpkg() if not NOSAVE else 0
     log(f"\n요약 {summary} / 레이어 사업지구 {n}건")
     if "GITHUB_STEP_SUMMARY" in __import__("os").environ:
         with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fp:
