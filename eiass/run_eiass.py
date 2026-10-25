@@ -156,6 +156,8 @@ def process(E, row, state, force=False):
     d = E.detail(cd, row["biz_seq"])
     meta = {"biz_cd": cd, "biz_nm": d["biz_nm"] or row.get("biz_nm"), "biz_type": d["biz_type"] or row.get("biz_type"),
             "location": d["location"], "choan_period": d["choan_period"] or row.get("choan_period"), "extracted": TODAY}
+    if not d["files"]:
+        return "skip", "평가서 파일 링크 없음(공람이 끝나면 비공개)", meta
     ov = find_overview(d["files"])
     if not ov:
         return "skip", "'사업의 개요' 파일 없음", meta
@@ -260,7 +262,7 @@ def main():
         st = state.get(r["biz_cd"], {}).get("status")
         if state.get(r["biz_cd"], {}).get("manual") and not a.codes:
             continue   # 손으로 맞춘 사업은 --codes 로 지정할 때만 다시 한다
-        if a.force or st is None or (st == "review" and a.retry_review) or st == "error":
+        if a.force or st is None or (st == "review" and a.retry_review) or st == "error" or (st == "skip" and a.retry_review):
             todo.append(r)
     log(f"목록 {len(rows)}건, 처리할 사업 {len(todo)}건")
     summary = {"ok": 0, "review": 0, "skip": 0, "error": 0}
