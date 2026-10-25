@@ -58,12 +58,15 @@ class Eiass:
         }
         html = self._req("POST", "/searchApi/search.do", data=data).text
         soup = BeautifulSoup(html, "html.parser")
-        rows = []
+        rows, seen = [], set()
         for tr in soup.select("tr"):
             a = tr.find("a", href=re.compile(r"view\('"))
             if not a:
                 continue
             m = re.search(r"view\('([^']+)',\s*'([^']+)'\)", a["href"])
+            if m.group(1) in seen:      # 화면용·모바일용 목록이 같은 사업을 두 번 담는다
+                continue
+            seen.add(m.group(1))
             tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
             period = next((t for t in tds if re.search(r"\d{4}\.\d{2}\.\d{2}\s*~", t)), "")
             rows.append({"biz_cd": m.group(1), "biz_seq": m.group(2), "no": tds[0] if tds else "",
@@ -116,19 +119,18 @@ class Eiass:
 
 
 def parse_plan_area(texts):
-    """평가서 글에서 사업면적(㎡)을 찾는다. '사업면적/사업규모 : 243,774㎡' 또는 토지이용계획 표의 '합 계 243,774'."""
-    cands = []
+    """평가서 글에서 사업면적(㎡)을 찾는다.
+    후보: '사업면적/사업규모/전체면적 : 243,774㎡'(A) 와 토지이용계획 표의 '합 계 243,774'(B).
+    A·B 양쪽에 나오는 값 -> B(표 합계, 가장 자주) -> A 순서로 고른다."""
+    A, B = [], []
     for t in texts:
-        for m in re.finditer(r"(사업\s*면적|사업\s*규모|총\s*면적|계획\s*면적)[^0-9]{0,25}([\d,]{5,})(\.\d+)?\s*(㎡|m2|m²)?", t):
-            cands.append((0, int(m.group(2).replace(",", ""))))
+        for m in re.finditer(r"(사\s*업\s*면\s*적|사\s*업\s*규\s*모|전\s*체\s*면\s*적|총\s*면\s*적|계\s*획\s*면\s*적)[^0-9]{0,25}([\d,]{5,})", t):
+            A.append(int(m.group(2).replace(",", "")))
         for m in re.finditer(r"합\s*계\s*([\d,]{5,})", t):
-            cands.append((1, int(m.group(1).replace(",", ""))))
-    if not cands:
-        return None
-    cands.sort(key=lambda x: x[0])
-    best = cands[0][0]
-    vals = [v for k, v in cands if k == best and v > 1000]
-    if not vals:
-        return None
-    # 가장 자주 나온 값
-    return max(set(vals), key=vals.count)
+            B.append(int(m.group(1).replace(",", "")))
+    A = [v for v in A if v > 1000]; B = [v for v in B if v > 1000]
+    both = [v for v in B if v in A]
+    for pool in (both, B, A):
+        if pool:
+            return max(set(pool), key=pool.count)
+    return None
