@@ -99,8 +99,8 @@ SIDO_ALIAS = {"전남광주통합특별시": ["전라남도", "광주광역시",
               "전북특별자치도": ["전북특별자치도", "전라북도"]}
 
 
-def locate(location_text):
-    """초안공람 '사업지위치' 글 -> (lon, lat, 방법). 예: '강원특별자치도 원주시 지정면 (저금어지길 102) 신평리 산57번지 일원'"""
+def address_variants(location_text):
+    """'사업지위치' 글 -> [(주소, PARCEL|ROAD)] 후보"""
     t = re.sub(r"\s+", " ", location_text or "").strip()
     road = re.search(r"\(([^)]*\d[^)]*)\)", t)
     base = re.sub(r"\([^)]*\)", " ", t)
@@ -116,21 +116,42 @@ def locate(location_text):
     for v in variants:
         cands.append((v, "PARCEL"))
         if road:
-            # 도로명은 '시군구 + 도로명 + 번호'. 시군구까지 앞부분을 붙인다.
             pre = " ".join(w for w in v.split(" ") if re.search(r"(시|군|구|읍|면)$", w))
             cands.append((pre + " " + road.group(1), "ROAD"))
-    for addr, kind in cands:
+    return cands
+
+
+def locate(location_text):
+    """초안공람 '사업지위치' 글 -> (lon, lat, 방법). 예: '강원특별자치도 원주시 지정면 (저금어지길 102) 신평리 산57번지 일원'"""
+    for addr, kind in address_variants(location_text):
         r = geocode(addr, kind)
         if r:
             return r[0], r[1], f"{kind}:{addr}"
-    # 마지막: 리/동 이름으로 검색
-    words = [w for w in base.split(" ") if re.search(r"(리|동|면|읍)$", w)]
+    base = re.sub(r"\([^)]*\)", " ", location_text or "")
+    words = [w for w in base.split() if re.search(r"(리|동|면|읍)$", w)]
     for w in reversed(words):
-        q = " ".join(base.split(" ")[:3]) + " " + w if len(base.split(" ")) > 3 else w
+        q = " ".join(base.split()[:3]) + " " + w
         r = search_place(q)
         if r:
             return r[0], r[1], f"search:{q}"
     return None
+
+
+_AVAIL = None
+
+
+def available():
+    """이 실행 환경에서 브이월드가 열리는지(미국 IP 의 GitHub Actions 는 막힌다: 2026-10-25 확인)."""
+    global _AVAIL
+    if _AVAIL is None:
+        try:
+            p = {"service": "address", "request": "getcoord", "version": "2.0", "crs": "epsg:4326", "type": "PARCEL",
+                 "address": "서울특별시 중구 태평로1가 31", "format": "json", "key": KEY}
+            r = S.get("https://api.vworld.kr/req/address", params=p, timeout=12)
+            _AVAIL = bool(KEY) and r.ok and r.json().get("response", {}).get("status") in ("OK", "NOT_FOUND")
+        except Exception:
+            _AVAIL = False
+    return _AVAIL
 
 
 # ---------------- 위성영상 ----------------
@@ -138,10 +159,11 @@ def ground_res(z, lat):
     return 2 * ORIGIN / (256 * 2 ** z) * math.cos(math.radians(lat))
 
 
-def satellite_mosaic(lon, lat, half_m, target_res, max_tiles=400):
+def satellite_mosaic(lon, lat, half_m, target_res, max_tiles=400, source=None):
     """중심(lon,lat) 주변 half_m(m) 를 덮는 위성영상. target_res(m/px)에 가까운 줌.
     반환: (img_rgb, x0, y0, res_merc)  픽셀(px,py) -> 3857 (x0+px*res, y0-py*res)"""
     import cv2
+    source = source or ("vworld" if available() else "esri")
     z = int(round(math.log2(2 * ORIGIN * math.cos(math.radians(lat)) / (256 * target_res))))
     z = max(10, min(19, z))
     while True:
@@ -159,7 +181,10 @@ def satellite_mosaic(lon, lat, half_m, target_res, max_tiles=400):
 
     def fetch(t):
         tx, ty = t
-        url = f"https://api.vworld.kr/req/wmts/1.0.0/{KEY}/Satellite/{z}/{ty}/{tx}.jpeg"
+        if source == "vworld":
+            url = f"https://api.vworld.kr/req/wmts/1.0.0/{KEY}/Satellite/{z}/{ty}/{tx}.jpeg"
+        else:   # 브이월드가 막힌 곳: Esri World Imagery(같은 XYZ 체계)
+            url = f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{ty}/{tx}"
         try:
             b = _get(url, timeout=20).content
             a = cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR)

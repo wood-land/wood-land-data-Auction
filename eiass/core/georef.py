@@ -37,7 +37,8 @@ def sift_georef(img, feat_mask, box, s_est, lon, lat, half_m, log=print):
     D = cv2.resize(sub, None, fx=1 / f, fy=1 / f, interpolation=cv2.INTER_AREA)
     Dm = cv2.resize(feat_mask, (D.shape[1], D.shape[0]), interpolation=cv2.INTER_NEAREST)
     S, sx0, sy0, sres, z, okfrac = vworld.satellite_mosaic(lon, lat, half_m, target)
-    log(f"    위성영상 z={z} {S.shape[1]}x{S.shape[0]} 타일성공 {okfrac:.0%}")
+    src = "vworld" if vworld.available() else "esri"
+    log(f"    위성영상({src}) z={z} {S.shape[1]}x{S.shape[0]} 타일성공 {okfrac:.0%}")
     if okfrac < 0.5:
         return {"ok": False, "reason": f"위성영상 타일 실패({okfrac:.0%})"}
     cl = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
@@ -62,7 +63,7 @@ def sift_georef(img, feat_mask, box, s_est, lon, lat, half_m, log=print):
     # 정합 근거가 넓게 퍼져 있는지(한쪽에 몰리면 회전·축척이 불안정)
     spread = np.ptp(pa[inl], axis=0) / np.array(D.shape[1::-1]) if inl.sum() else np.zeros(2)
     A = _compose(M, f, (x0b, y0b), sx0, sy0, sres)
-    out = {"ok": True, "method": "sift", "A": A, "inliers": int(inl.sum()), "matches": len(good),
+    out = {"ok": True, "method": "sift", "imagery": src, "A": A, "inliers": int(inl.sum()), "matches": len(good),
            "rms_m": float(np.sqrt(np.mean(resid ** 2)) * sres * math.cos(math.radians(lat))) if len(resid) else None,
            "scale_ratio": float(scale / exp_scale), "spread": float(spread.min()),
            "rot_deg": float(math.degrees(math.atan2(M[1, 0], M[0, 0]))),

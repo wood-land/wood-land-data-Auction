@@ -34,6 +34,14 @@ class Eiass:
                 r = self.s.request(method, BASE + path, timeout=self.timeout, **kw)
                 r.raise_for_status()
                 return r
+            except requests.exceptions.SSLError as e:
+                # 서버가 중간 인증서를 안 보낸다 -> AIA 로 받아 검증 번들을 바꾼다(검증은 끄지 않는다)
+                from .tls import bundle_for
+                b = bundle_for("www.eiass.go.kr")
+                if not b or self.s.verify == b:
+                    raise
+                self.s.verify = b
+                last = e
             except requests.RequestException as e:
                 last = e
                 time.sleep(2 + 3 * i)
