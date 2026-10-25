@@ -28,10 +28,12 @@ from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))  # 저장소 최상위의 pc_common.py
 
 from core import blocked_sites as B  # noqa: E402
 from core import local_dir  # noqa: E402
 from core import pc_runlog  # noqa: E402
+import pc_common  # noqa: E402
 from core.paths import DB_REPO_DIR, DATA_DIR  # noqa: E402
 
 DATA = str(DB_REPO_DIR)  # 비공개 DB 저장소(별도 git 저장소, 여러 크롤러 공용; 위치는 core/paths.py). 이 크롤러의 DB 는 그 안의 gosi/
@@ -63,6 +65,7 @@ def commit_push(cwd, paths, message, label):
         if run(["git", "pull", "--rebase", "--autostash"], cwd) == 0 and run(["git", "push"], cwd) == 0:
             print(f"\n[{label}] 올리기 완료(재시도).")
             return True
+        run(["git", "rebase", "--abort"], cwd)  # sqlite 충돌로 pull 이 멈춘 채 두지 않는다(다음 실행의 시작 전 점검이 복구한다)
         print(f"\n[주의] [{label}] 올리기에 실패했습니다. 결과는 이 PC 에만 커밋돼 있습니다 - 다른 PC 가 돌기 전에 다시 실행해(시작할 때 먼저 올립니다) 올려 두세요.")
         return False
     print(f"\n[{label}] 올리기 완료.")
@@ -96,20 +99,8 @@ def preflight(use_git, git=_git_out, push=None):
     if not use_git:
         return True
     push = push or (lambda cwd: run(["git", "push"], cwd) == 0)
-    for label, cwd in (("코드 저장소", HERE), ("DB 저장소", DATA)):
-        stuck, unpushed = git_problems(cwd, git)
-        if stuck:
-            print(f"\n[중단] {label}({cwd}) 상태가 이상합니다. 수집하지 않고 끝냅니다:")
-            for s in stuck:
-                print("  - " + s)
-            print("  해결: 그 폴더에서 `git status` 를 보고 충돌을 푼 뒤(또는 `git rebase --abort`) 다시 실행하세요.")
-            return False
-        if unpushed:
-            print(f"\n[알림] {label}에 아직 올리지 못한 커밋 {unpushed}개가 있습니다(이전 실행의 push 실패). 먼저 올립니다.")
-            if not push(cwd):
-                print(f"[중단] 올리지 못했습니다. 그대로 수집하면 다른 PC 와 DB 가 갈라집니다. 네트워크·권한을 확인하고 다시 실행하세요.")
-                return False
-    return True
+    # 점검 규칙은 환경영향평가 실행기와 같다(pc_common). DB 저장소는 충돌·push 실패 시 이 PC 의 수집 결과만 버리고 원격 최신으로 맞춘다
+    return pc_common.preflight([("코드 저장소", HERE), ("DB 저장소", DATA)], git=git, push=push)
 
 
 def ensure_pc_name(ask=input, interactive=None):

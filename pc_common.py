@@ -100,12 +100,47 @@ def git_problems(cwd, git=git_out, exists=os.path.exists):
     return stuck, unpushed
 
 
-def preflight(repos, git=git_out, push=None):
-    """repos: [(이름, 경로), ...]. 문제가 있으면 안내를 출력하고 False(수집하지 않음). 못 올린 커밋은 먼저 올려 본다."""
+# DB 저장소에서 PC 수집이 만드는 파일(이 경로의 변경만 있을 때 버리고 원격 최신으로 맞춰도 된다)
+PC_OUTPUT_PREFIXES = ("gosi/국내IP_", "gosi/pc_runs.jsonl", "eiass/")
+
+
+def recover_db_repo(cwd, git=git_out):
+    """DB 저장소가 충돌·push 실패로 막혔을 때, 이 PC 의 수집 결과(PC_OUTPUT_PREFIXES)만 걸려 있으면 그것을 버리고 원격 최신으로 맞춘다.
+    PC 결과는 7일 창에서 다시 수집하면 되는 파생 데이터이고, sqlite 는 이진 파일이라 합칠 수 없어 이 방법이 가장 안전하다
+    (버린 글은 원격 DB 의 '처리한 글' 기록에 없으므로 이번 실행에서 다시 수집된다). 다른 변경이 섞여 있으면 손대지 않고 False."""
+    git(["rebase", "--abort"], cwd)  # 해당 상태가 아니면 실패하지만 무시한다
+    git(["merge", "--abort"], cwd)
+    rc, _ = git(["fetch"], cwd)
+    if rc != 0:
+        return False
+    rc, committed = git(["-c", "core.quotepath=false", "diff", "--name-only", "@{u}...HEAD"], cwd)
+    rc2, dirty = git(["-c", "core.quotepath=false", "status", "--porcelain"], cwd)
+    if rc != 0 or rc2 != 0:
+        return False
+    names = [n.strip().strip('"') for n in committed.splitlines() if n.strip()]
+    names += [ln[3:].strip().strip('"') for ln in dirty.splitlines() if ln.strip()]
+    if any(not n.startswith(PC_OUTPUT_PREFIXES) for n in names):
+        return False
+    return git(["reset", "--hard", "@{u}"], cwd)[0] == 0
+
+
+def preflight(repos, git=git_out, push=None, recover=("DB 저장소",)):
+    """repos: [(이름, 경로), ...]. 문제가 있으면 안내를 출력하고 False(수집하지 않음). 못 올린 커밋은 먼저 올려 본다.
+    recover 에 든 저장소(DB 저장소)는 충돌·push 실패 시 이 PC 의 수집 결과만 버리고 원격 최신으로 맞춘 뒤 계속한다
+    (다른 PC 가 먼저 올린 결과와 이 PC 의 올리지 못한 결과가 같은 sqlite 를 고쳐 부딪친 경우 등)."""
     push = push or (lambda cwd: subprocess.run(["git", "push"], cwd=str(cwd)).returncode == 0)
+
+    def recovered(label, cwd, why):
+        if label in recover and recover_db_repo(cwd, git):
+            print(f"[복구] {label}: {why} -> 이 PC 의 올리지 못한 수집 결과를 버리고 원격 최신으로 맞췄습니다(그 글들은 이번에 다시 수집됩니다).")
+            return True
+        return False
+
     for label, cwd in repos:
         stuck, unpushed = git_problems(cwd, git)
         if stuck:
+            if recovered(label, cwd, "pull/합치기가 끝나지 않았거나 충돌이 남아 있음"):
+                continue
             print(f"\n[중단] {label}({cwd}) 상태가 이상합니다. 수집하지 않고 끝냅니다:")
             for s in stuck:
                 print("  - " + s)
@@ -114,6 +149,8 @@ def preflight(repos, git=git_out, push=None):
         if unpushed:
             print(f"\n[알림] {label}에 아직 올리지 못한 커밋 {unpushed}개가 있습니다(이전 실행의 push 실패). 먼저 올립니다.")
             if not push(cwd):
+                if recovered(label, cwd, "올리지 못한 커밋이 원격과 부딪침"):
+                    continue
                 print("[중단] 올리지 못했습니다. 그대로 수집하면 다른 PC 와 DB 가 갈라집니다. 네트워크·권한을 확인하고 다시 실행하세요.")
                 return False
     return True

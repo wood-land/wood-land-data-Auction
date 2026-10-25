@@ -49,6 +49,31 @@ def clone_db():
     return True
 
 
+def vworld_key_found():
+    """eiass/core/keys.py 와 같은 규칙: 환경변수 VWORLD_API_KEY, 또는 500_local 아래 이름에 vworld/브이월드 가 든 폴더의 키 파일."""
+    import re
+    if os.environ.get("VWORLD_API_KEY", "").strip():
+        return True
+    pat = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
+    for folder in local_dir.find_dirs(r"vworld|브이월드"):
+        for f in folder.rglob("*"):
+            try:
+                if f.is_file() and pat.search(f.read_text(encoding="utf-8", errors="ignore")):
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def tesseract_ok():
+    from core.gazette_extractor import TESSERACT
+    try:
+        out = subprocess.run([TESSERACT, "--list-langs"], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "kor" in out.split()
+
+
 def check_local():
     base = local_dir.local_dir()
     if not base:
@@ -57,10 +82,14 @@ def check_local():
         return False
     print(f"500_local: {base}")
     from core.pnu import load_key
+    from core.ai_fix import load_key as deepseek_key
     ok = True
     for label, found in (("카카오 REST 키", bool(load_key())),
+                         ("DeepSeek 키(AI 주소 보정)", bool(deepseek_key())),
+                         ("브이월드 키(환경영향평가 선 도면)", vworld_key_found()),
                          ("구글 서비스 계정 키", local_dir.google_key_file().exists()),
-                         ("로그 시트 ID", bool(local_dir.sheet_id()))):
+                         ("로그 시트 ID", bool(local_dir.sheet_id())),
+                         ("Tesseract OCR + 한글(kor) 데이터(스캔 PDF 읽기)", tesseract_ok())):
         print(f"  [{'OK' if found else '없음'}] {label}")
         ok = ok and found
     if not ok:

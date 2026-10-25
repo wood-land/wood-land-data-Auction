@@ -161,5 +161,67 @@ class RunAll(unittest.TestCase):
             self.assertEqual(A.main(["--no-git"]), 2)
 
 
+class RecoverDbRepoWithRealGit(unittest.TestCase):
+    """실제 git 으로: 두 PC 가 같은 sqlite 를 각자 고쳐 한쪽이 push 에 실패한 상황(이진 파일이라 합칠 수 없음)을 복구하는지 확인한다."""
+
+    def setUp(self):
+        import shutil
+        if not shutil.which("git"):
+            self.skipTest("git 없음")
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.remote, self.a, self.b = base / "remote.git", base / "pcwj", base / "pcyw"
+        self.run_git(base, "init", "-q", "--bare", "-b", "main", str(self.remote))
+        for clone in (self.a, self.b):
+            self.run_git(base, "clone", "-q", str(self.remote), str(clone))
+            self.run_git(clone, "config", "user.email", "t@example.com")
+            self.run_git(clone, "config", "user.name", "t")
+        (self.a / "gosi").mkdir()
+        (self.a / "gosi" / "국내IP_경북.sqlite").write_bytes(b"v0")
+        (self.a / "README.md").write_text("x")
+        self.run_git(self.a, "add", "-A")
+        self.run_git(self.a, "commit", "-q", "-m", "base")
+        self.run_git(self.a, "push", "-q", "origin", "HEAD:main")
+        self.run_git(self.b, "pull", "-q", "origin", "main")
+        self.run_git(self.b, "branch", "-u", "origin/main")
+        self.run_git(self.a, "branch", "-u", "origin/main")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def run_git(cwd, *args):
+        import subprocess as sp
+        r = sp.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, encoding="utf-8")
+        assert r.returncode == 0, (args, r.stderr)
+
+    def commit(self, repo, name, data, msg):
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_bytes(data)
+        self.run_git(repo, "add", "-A")
+        self.run_git(repo, "commit", "-q", "-m", msg)
+
+    def test_diverged_sqlite_commits_are_discarded_for_remote(self):
+        self.commit(self.b, "gosi/국내IP_경북.sqlite", b"from-yw", "yw")
+        self.run_git(self.b, "push", "-q", "origin", "HEAD:main")
+        self.commit(self.a, "gosi/국내IP_경북.sqlite", b"from-wj", "wj (push 실패로 남음)")
+        ok = C.preflight([("DB 저장소", self.a)])
+        self.assertTrue(ok)
+        self.assertEqual((self.a / "gosi" / "국내IP_경북.sqlite").read_bytes(), b"from-yw")  # 원격(PCyw) 쪽으로 맞춰졌다
+        self.assertEqual(C.git_problems(self.a), ([], 0))
+
+    def test_foreign_changes_are_never_discarded(self):
+        self.commit(self.b, "README.md", b"remote-edit", "other")
+        self.run_git(self.b, "push", "-q", "origin", "HEAD:main")
+        self.commit(self.a, "README.md", b"local-edit", "local code change")
+        self.assertFalse(C.preflight([("DB 저장소", self.a)]))
+        self.assertEqual((self.a / "README.md").read_bytes(), b"local-edit")
+
+    def test_unpushed_but_not_diverged_is_just_pushed(self):
+        self.commit(self.a, "gosi/국내IP_경북.sqlite", b"from-wj", "wj")
+        self.assertTrue(C.preflight([("DB 저장소", self.a)]))
+        self.assertEqual((self.a / "gosi" / "국내IP_경북.sqlite").read_bytes(), b"from-wj")
+
+
 if __name__ == "__main__":
     unittest.main()

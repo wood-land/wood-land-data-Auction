@@ -75,9 +75,13 @@ class Preflight(unittest.TestCase):
         ok, pushed = self.run_pre({"code": ([], 0), "db": ([], 1)})
         self.assertEqual((ok, pushed), (True, ["db"]))
 
-    def test_stops_when_leftover_push_fails(self):
+    def test_stops_when_code_repo_push_fails(self):
+        ok, pushed = self.run_pre({"code": ([], 1), "db": ([], 0)}, push_ok=False)
+        self.assertFalse(ok)  # 코드 저장소는 자동으로 버리지 않는다
+
+    def test_db_repo_push_failure_is_recovered(self):
         ok, pushed = self.run_pre({"code": ([], 0), "db": ([], 1)}, push_ok=False)
-        self.assertFalse(ok)
+        self.assertTrue(ok)  # DB 저장소의 이 PC 결과는 버리고 원격 최신으로 맞춘 뒤 계속한다(pc_common.recover_db_repo)
 
     def test_stops_on_conflict(self):
         ok, pushed = self.run_pre({"code": (["a.sqlite"], 0), "db": ([], 0)})
