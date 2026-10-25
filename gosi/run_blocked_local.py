@@ -14,6 +14,7 @@ GitHub 호스티드 러너(미국 IP)에서는 core/blocked_sites.py 의 게시�
 
   python run_blocked_local.py            # 받기 -> 수집 -> 올리기
   python run_blocked_local.py --no-git   # 시험용: 수집만 하고 git 은 건드리지 않는다
+  python run_blocked_local.py --reread   # 이미 처리한 글도 7일 창 안이면 다시 읽는다(AI 오류 등으로 빈 결과가 남았을 때)
 
 PC 가 두 대(PCwj, PCyw)이고 서로 다른 시간에 도는 것이 전제다(동시에 돌지 않는다). 그래서 PC 별 DB 파일 분리는 필요 없고, 같은 국내IP_*.sqlite 를
 순서대로 받고(pull) 수집하고 올린다(push). 시작 전 점검(preflight)이 '못 올린 커밋'·'충돌로 멈춘 상태'를 걸러낸다. PC 이름은
@@ -129,7 +130,7 @@ def ensure_pc_name(ask=input, interactive=None):
     return ""
 
 
-def _main(use_git, rec):
+def _main(use_git, rec, reread=False):
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     print(f"===== 막힌 지자체 PC 수집 {VERSION} =====")
     pc = ensure_pc_name()
@@ -186,7 +187,7 @@ def _main(use_git, rec):
         name = f"국내IP_{region}.sqlite"
         try:
             rc = subprocess.run([sys.executable, "-u", "run_scheduled.py", "--region", region, "--blocked", "only",
-                                 "--db", str(DATA_DIR / name), "--log-prefix", pc],
+                                 "--db", str(DATA_DIR / name), "--log-prefix", pc] + (["--reread"] if reread else []),
                                 cwd=HERE, env=env, timeout=REGION_TIMEOUT).returncode
             print(f"  -> {region}: {'완료' if rc == 0 else f'오류 종료(코드 {rc})'}")
             status = "ok" if rc == 0 else f"exit {rc}"
@@ -214,10 +215,10 @@ def _main(use_git, rec):
     return 0 if ok_db and ok_code else 1
 
 
-def main(use_git=True):
+def main(use_git=True, reread=False):
     rec = pc_runlog.new_record(local_dir.pc_name(), VERSION)
     try:
-        return _main(use_git, rec)
+        return _main(use_git, rec, reread)
     except BaseException as e:  # 어디서 죽었는지 남긴다
         rec["result"] = f"crashed: {type(e).__name__}: {str(e)[:150]}"
         raise
@@ -231,6 +232,6 @@ def main(use_git=True):
 
 
 if __name__ == "__main__":
-    code = main(use_git="--no-git" not in sys.argv)
+    code = main(use_git="--no-git" not in sys.argv, reread="--reread" in sys.argv)
     print("\n끝났습니다. 창을 닫아도 됩니다.")
     sys.exit(code)
