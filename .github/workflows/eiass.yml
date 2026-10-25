@@ -1,0 +1,102 @@
+name: eiass-choan
+
+# 환경영향평가 초안공람 사업지구 자동 추출 (eiass/README.md)
+# 코드는 이 공개 저장소, 결과는 비공개 저장소(wood-land/wood-land-data-db)의 eiass/ 폴더.
+# Secrets: DATA_DB_TOKEN(news 와 같음), VWORLD_API_KEY(news 와 같음), VWORLD_DOMAIN(선택: 브이월드 키 발급 때 적은 서비스 URL)
+
+on:
+  schedule:
+    - cron: "20 22 * * *"   # 매일 07:20 KST
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "run = 추출, diag = 접속 점검만"
+        required: false
+        default: "run"
+      pages:
+        description: "목록 몇 쪽까지(1쪽=10건, 비우면 2)"
+        required: false
+        default: ""
+      codes:
+        description: "특정 사업만(사업코드:순번, 쉼표 구분. 예: GG2026B008:45831)"
+        required: false
+        default: ""
+      force:
+        description: "true 면 이미 한 사업도 다시"
+        required: false
+        default: ""
+      retry_review:
+        description: "true 면 검토대기(review) 사업도 다시"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eiass-choan
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    defaults:
+      run:
+        working-directory: eiass
+    env:
+      PYTHONIOENCODING: utf-8
+      VWORLD_API_KEY: ${{ secrets.VWORLD_API_KEY }}
+      VWORLD_DOMAIN: ${{ secrets.VWORLD_DOMAIN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout private DB repo -> eiass/data/
+        uses: actions/checkout@v4
+        with:
+          repository: wood-land/wood-land-data-db
+          token: ${{ secrets.DATA_DB_TOKEN }}
+          path: eiass/data
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: eiass/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: 접속 점검 (EIASS·브이월드)
+        continue-on-error: true
+        run: python diag.py
+
+      - name: 초안공람 사업지구 추출
+        if: github.event.inputs.mode != 'diag'
+        env:
+          PAGES: ${{ github.event.inputs.pages }}
+          CODES: ${{ github.event.inputs.codes }}
+          FORCE: ${{ github.event.inputs.force }}
+          RETRY: ${{ github.event.inputs.retry_review }}
+        run: |
+          ARGS="--pages ${PAGES:-2}"
+          [ -n "$CODES" ] && ARGS="$ARGS --codes $CODES"
+          [ "$FORCE" = "true" ] && ARGS="$ARGS --force"
+          [ "$RETRY" = "true" ] && ARGS="$ARGS --retry-review"
+          python run_eiass.py $ARGS
+
+      - name: Commit eiass/ (비공개 DB 저장소)
+        if: always() && github.event.inputs.mode != 'diag'
+        working-directory: eiass/data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          [ -d eiass ] || { echo "eiass/ 없음"; exit 0; }
+          git add eiass
+          if git diff --cached --quiet; then echo "변경 없음"; exit 0; fi
+          git commit -m "eiass: 초안공람 사업지구 갱신 $(date -u +%F)"
+          echo "DB 저장소 크기: $(git count-objects -vH | grep size-pack)"
+          for i in 1 2 3 4 5 6; do
+            git pull --rebase origin main && git push && exit 0
+            sleep $((RANDOM % 10 + 5))
+          done
+          echo "::error::push 실패"; exit 1
