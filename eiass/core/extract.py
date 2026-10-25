@@ -2,6 +2,8 @@
 core/extract.py - 평가서 도면(쪽 그림)에서 사업지구 경계 폴리곤을 뽑는다.
 
 토지이용계획도는 보통 빨간 경계선(실선/점선/일점쇄선) 안쪽을 용도별 색으로 칠한다.
+빨강이 아닐 때(자주·파랑·노랑·흰 점선)나 경계선 없이 채색 면만 있을 때를 위해 색별 후보를 만들고(extract_candidates),
+좌표 맞춤·품질검사를 통과하는 첫 후보를 쓴다.
   1) 빨간 선을 굵혀 끊긴 점선을 잇고, 채색 영역과 합쳐 '벽'을 만든다
   2) 쪽 가장자리에서 바깥을 채워(flood fill) 벽 안쪽을 얻는다
   3) 빨간 선을 가장 많이 품은 덩어리를 사업지구로 고르고, 굵힌 만큼 다시 깎아 경계선 중심에 맞춘다
@@ -25,10 +27,30 @@ def sat_mask(img, sat=90):
     return ((mx - mn) > sat).astype(np.uint8)
 
 
-def extract(img, di=8, sat=90, prune=6, use_fill=True):
-    """img: RGB. 반환 dict(mask, contour(Nx2, 쪽 px), area_px, red_frac) 또는 None"""
+# 경계선 색 후보(앞쪽이 우선). 빨강이 가장 흔하고, 그다음 자주색·파랑·노랑(형광 연두)·흰색(항공사진 위 점선) 순.
+def color_masks(img):
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    h, s, v = hsv[:, :, 0].astype(np.int16), hsv[:, :, 1].astype(np.int16), hsv[:, :, 2].astype(np.int16)
+    mn = img.min(2).astype(np.int16)
+    return [
+        ("red", red_mask(img)),
+        ("magenta", ((h >= 140) & (h <= 172) & (s > 110) & (v > 110)).astype(np.uint8)),
+        ("blue", ((h >= 100) & (h <= 130) & (s > 130) & (v > 70)).astype(np.uint8)),
+        ("yellow", ((h >= 18) & (h <= 40) & (s > 150) & (v > 170)).astype(np.uint8)),
+        ("white", ((mn > 215) & (s < 25)).astype(np.uint8)),
+    ]
+
+
+def thin_lines(M, k=6):
+    """색 마스크에서 굵은 덩어리(채색 면)를 빼고 선만 남긴다(두께 2k+1px 미만)."""
+    return (M & (1 - cv2.morphologyEx(M, cv2.MORPH_OPEN, _sq(k)))).astype(np.uint8)
+
+
+def extract(img, di=8, sat=90, prune=6, use_fill=True, line=None):
+    """img: RGB, line: 경계선 마스크(없으면 빨강). 반환 dict(mask, contour(Nx2, 쪽 px), area_px, red_frac) 또는 None
+    red_frac: 윤곽이 경계선을 따라간 비율(색이 빨강이 아니어도 이름은 그대로 둔다)."""
     H, W = img.shape[:2]
-    R = red_mask(img)
+    R = red_mask(img) if line is None else line
     if R.sum() < 200:
         return None
     B = cv2.dilate(R, _sq(di))
@@ -42,7 +64,7 @@ def extract(img, di=8, sat=90, prune=6, use_fill=True):
     n2, lab2, st, _ = cv2.connectedComponentsWithStats(inside, connectivity=4)
     if n2 <= 1:
         return None
-    # 빨간 선을 가장 많이 품은 덩어리(쪽 전체를 덮는 덩어리는 제외)
+    # 경계선을 가장 많이 품은 덩어리(쪽 전체를 덮는 덩어리는 제외)
     redcnt = np.bincount(lab2.ravel(), weights=R.ravel(), minlength=n2)
     best, bestv = -1, 0
     for k in range(1, n2):
@@ -63,34 +85,75 @@ def extract(img, di=8, sat=90, prune=6, use_fill=True):
         return None
     k = 1 + int(np.argmax(st3[1:, cv2.CC_STAT_AREA]))
     P = (lab3 == k).astype(np.uint8)
+    if P.sum() < 0.003 * H * W:
+        return None
     cs, _ = cv2.findContours(P, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     c = max(cs, key=cv2.contourArea)
     c = cv2.approxPolyDP(c, 1.2, True)[:, 0, :].astype(float)
-    # 윤곽 중 빨간 선 가까이(굵힌 폭 안)에 있는 비율: 경계를 제대로 따라갔는지
     near = cv2.dilate(R, _sq(di + 4))
     cc = np.clip(c.astype(int), 0, [W - 1, H - 1])
     red_frac = float(near[cc[:, 1], cc[:, 0]].mean())
     return {"mask": P, "contour": c, "area_px": float(P.sum()), "red_frac": red_frac, "di": di}
 
 
-def best_extract(img):
-    """여러 설정으로 뽑아 경계를 가장 잘 따르는 것을 고른다."""
-    res = []
-    for di in (6, 9, 12):
-        for fill in (True, False):
-            try:
-                e = extract(img, di=di, use_fill=fill)
-            except Exception:
-                e = None
-            if e and e["red_frac"] >= 0.55:
-                e["fill"] = fill
-                res.append(e)
-    if not res:
+def fill_extract(img, sat=90):
+    """경계선이 따로 없을 때: 용도별 채색 면을 합친 바깥 윤곽."""
+    H, W = img.shape[:2]
+    S = sat_mask(img, sat)
+    S = S & cv2.morphologyEx(S, cv2.MORPH_OPEN, _sq(3))          # 글자·가는 선 제거
+    C = cv2.morphologyEx(S, cv2.MORPH_CLOSE, _sq(15))            # 채색 블록 사이 도로(흰 띠) 메우기
+    n, lab, st, _ = cv2.connectedComponentsWithStats(C, connectivity=4)
+    if n <= 1:
         return None
-    # 경계 추종이 좋은 것 중 면적이 큰 것(끊긴 선 때문에 일부만 잡히는 것을 피한다)
-    top = max(r["red_frac"] for r in res)
-    good = [r for r in res if r["red_frac"] >= top - 0.08]
-    return max(good, key=lambda r: r["area_px"])
+    k = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
+    if not (0.01 * H * W < st[k, cv2.CC_STAT_AREA] < 0.7 * H * W):
+        return None
+    P = (lab == k).astype(np.uint8)
+    cs, _ = cv2.findContours(P, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    c = max(cs, key=cv2.contourArea)
+    P = np.zeros_like(P); cv2.drawContours(P, [c], -1, 1, -1)    # 안쪽 구멍 메우기
+    c = cv2.approxPolyDP(c, 1.2, True)[:, 0, :].astype(float)
+    # 채색 블록이 경계 안을 얼마나 채우는지(낮으면 범례·표일 가능성)
+    fill = float(S[P > 0].mean())
+    return {"mask": P, "contour": c, "area_px": float(P.sum()), "red_frac": fill, "di": 0}
+
+
+def extract_candidates(img, max_n=4):
+    """경계 후보들을 우선순위대로. 색마다 최선 1개 + 채색 면 1개.
+    좌표 맞춤·품질검사에서 앞 후보가 떨어지면 다음 후보를 쓴다."""
+    out = []
+    for color, M in color_masks(img):
+        line = M if color == "red" else thin_lines(M)
+        if line.sum() < 500:
+            continue
+        res = []
+        for di in (6, 9, 12):
+            for fill in ((True, False) if color != "white" else (False,)):
+                try:
+                    e = extract(img, di=di, use_fill=fill, line=line)
+                except Exception:
+                    e = None
+                if e and e["red_frac"] >= (0.55 if color == "red" else 0.7):
+                    e["fill"] = fill
+                    res.append(e)
+        if res:
+            top = max(r["red_frac"] for r in res)
+            e = max([r for r in res if r["red_frac"] >= top - 0.08], key=lambda r: r["area_px"])
+            e["color"] = color
+            out.append(e)
+    try:
+        f = fill_extract(img)
+    except Exception:
+        f = None
+    if f and f["red_frac"] >= 0.6:
+        f["color"] = "fill"; f["fill"] = True
+        out.append(f)
+    return out[:max_n]
+
+
+def best_extract(img):
+    c = extract_candidates(img, 1)
+    return c[0] if c else None
 
 
 def background_kind(img, mask, pad=0.3):

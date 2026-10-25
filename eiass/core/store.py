@@ -60,7 +60,8 @@ def seed_from_gpkg(state):
             props = {}
         auto = str(props.get("georef", "")).startswith("자동")
         if not auto and not state.get(f.stem, {}).get("manual"):
-            state[f.stem] = {"status": "ok", "note": "수동 추출 결과", "manual": True}
+            # 사람이 손으로 맞춰 넣은 결과. 이슈 번호 등 기존 기록은 남겨 알림이 이슈를 닫을 수 있게 한다
+            state[f.stem] = {**state.get(f.stem, {}), "status": "ok", "note": "수동 추출 결과", "manual": True, "need": None}
         elif f.stem not in state:
             state[f.stem] = {"status": "ok", "note": "기존 결과"}
     if not GPKG.exists() or any((DATA / "projects").glob("*.geojson")):
