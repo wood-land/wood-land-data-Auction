@@ -30,6 +30,10 @@ on:
         description: "true 면 검토대기(review) 사업도 다시"
         required: false
         default: ""
+      test:
+        description: "true 면 저장하지 않고 로그만(시험)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -79,11 +83,13 @@ jobs:
           CODES: ${{ github.event.inputs.codes }}
           FORCE: ${{ github.event.inputs.force }}
           RETRY: ${{ github.event.inputs.retry_review }}
+          TEST: ${{ github.event.inputs.test }}
         run: |
           ARGS="--pages ${PAGES:-2}"
           [ -n "$CODES" ] && ARGS="$ARGS --codes $CODES"
           [ "$FORCE" = "true" ] && ARGS="$ARGS --force"
           [ "$RETRY" = "true" ] && ARGS="$ARGS --retry-review"
+          [ "$TEST" = "true" ] && ARGS="$ARGS --test"
           python run_eiass.py $ARGS
 
       - name: Commit eiass/ (비공개 DB 저장소)
