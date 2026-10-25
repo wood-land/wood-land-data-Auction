@@ -94,16 +94,18 @@ def best_extract(img):
 
 
 def background_kind(img, mask, pad=0.3):
-    """경계 바깥 배경이 항공사진인지 선 도면인지. 흰 픽셀 비율로 가른다."""
+    """경계 바깥 배경이 항공사진인지 선 도면인지. 경계 바로 바깥 띠(사업지구 크기의 약 8%)의 흰 픽셀 비율로 가른다
+    (여백·범례·표가 섞이지 않게 바로 바깥만 본다)."""
     H, W = img.shape[:2]
     ys, xs = np.nonzero(mask)
     x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
     dx, dy = int((x1 - x0) * pad), int((y1 - y0) * pad)
-    x0, x1, y0, y1 = max(0, x0 - dx), min(W, x1 + dx), max(0, y0 - dy), min(H, y1 + dy)
-    sub = img[y0:y1, x0:x1]; m = mask[y0:y1, x0:x1] == 0
-    px = sub[m]
-    white = (px.min(1) > 230).mean() if len(px) else 1
-    return ("aerial" if white < 0.35 else "line"), float(white), (x0, y0, x1, y1)
+    box = (max(0, x0 - dx), max(0, y0 - dy), min(W, x1 + dx), min(H, y1 + dy))
+    k = max(15, int(0.08 * max(x1 - x0, y1 - y0)))
+    band = (cv2.dilate(mask, _sq(k)) > 0) & (cv2.dilate(mask, _sq(12)) == 0)
+    px = img[band]
+    white = float((px.min(1) > 225).mean()) if len(px) else 1.0
+    return ("aerial" if white < 0.25 else "line"), white, box
 
 
 def line_points(img, mask, box, step=1):

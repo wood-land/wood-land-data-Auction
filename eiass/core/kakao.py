@@ -15,7 +15,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
-KEY = os.environ.get("KAKAO_REST_API_KEY", "").strip()
+from .keys import load as _load_key
+
+KEY = _load_key("KAKAO_REST_API_KEY")
 API = "https://dapi.kakao.com/v2/local"
 S = requests.Session()
 

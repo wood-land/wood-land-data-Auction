@@ -18,7 +18,9 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import requests
 
-KEY = os.environ.get("VWORLD_API_KEY", "").strip()
+from .keys import load as _load_key
+
+KEY = _load_key("VWORLD_API_KEY")
 DOMAIN = os.environ.get("VWORLD_DOMAIN", "").strip()
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 R_EARTH = 6378137.0

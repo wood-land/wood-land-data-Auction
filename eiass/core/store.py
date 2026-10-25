@@ -51,7 +51,18 @@ def save_state(st):
 
 
 def seed_from_gpkg(state):
-    """처음 실행: 손으로 만든 gpkg 의 사업들을 projects/ 로 옮기고 state 에 '완료'로 적는다."""
+    """처음 실행: 손으로 만든 gpkg 의 사업들을 projects/ 로 옮기고 state 에 '완료'로 적는다.
+    projects/ 에 있는데 state 에 없는 사업도 '완료'로 적는다(이력 파일이 늦게 생긴 경우)."""
+    for f in (DATA / "projects").glob("*.geojson"):
+        try:
+            props = json.loads(f.read_text(encoding="utf-8"))["features"][0]["properties"]
+        except Exception:
+            props = {}
+        auto = str(props.get("georef", "")).startswith("자동")
+        if not auto and not state.get(f.stem, {}).get("manual"):
+            state[f.stem] = {"status": "ok", "note": "수동 추출 결과", "manual": True}
+        elif f.stem not in state:
+            state[f.stem] = {"status": "ok", "note": "기존 결과"}
     if not GPKG.exists() or any((DATA / "projects").glob("*.geojson")):
         return
     import geopandas as gpd
@@ -59,7 +70,7 @@ def seed_from_gpkg(state):
     for _, r in g.iterrows():
         props = {k: (None if str(r.get(k)) == "nan" else r.get(k)) for k in FIELDS if k in g.columns}
         write_project(r["biz_cd"], props, r.geometry)
-        state[r["biz_cd"]] = {"status": "ok", "note": "수동 추출(2026-10-25)", "date": str(r.get("extracted", ""))}
+        state[r["biz_cd"]] = {"status": "ok", "note": "수동 추출(2026-10-25)", "date": str(r.get("extracted", "")), "manual": True}
 
 
 def write_project(biz_cd, props, geom4326):
