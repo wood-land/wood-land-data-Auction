@@ -27,6 +27,7 @@ from core import georef, kakao, site, store, vworld
 
 FIG_KEYS = [("토지이용계획", 3), ("항공사진", 2), ("중첩", 2), ("배치도", 1), ("지구계", 1)]
 TODAY = datetime.date.today().isoformat()
+RUNNER = "actions" if __import__("os").environ.get("GITHUB_ACTIONS") else (__import__("os").environ.get("GOSI_PC_NAME") or __import__("platform").node())
 
 
 def log(*a):
@@ -257,6 +258,8 @@ def main():
     todo = []
     for r in rows:
         st = state.get(r["biz_cd"], {}).get("status")
+        if state.get(r["biz_cd"], {}).get("manual") and not a.codes:
+            continue   # 손으로 맞춘 사업은 --codes 로 지정할 때만 다시 한다
         if a.force or st is None or (st == "review" and a.retry_review) or st == "error":
             todo.append(r)
     log(f"목록 {len(rows)}건, 처리할 사업 {len(todo)}건")
@@ -268,7 +271,9 @@ def main():
         except Exception as err:
             traceback.print_exc()
             status, note = "error", f"{type(err).__name__}: {err}"[:200]
-        state[r["biz_cd"]] = {"status": status, "note": note, "date": TODAY, "biz_seq": r["biz_seq"],
+        if status != "ok" and state.get(r["biz_cd"], {}).get("status") == "ok":
+            log("  (이전 결과가 있어 그대로 둔다)"); continue
+        state[r["biz_cd"]] = {"status": status, "note": note, "date": TODAY, "biz_seq": r["biz_seq"], "runner": RUNNER,
                               "biz_nm": r.get("biz_nm", state.get(r["biz_cd"], {}).get("biz_nm", ""))}
         summary[status] = summary.get(status, 0) + 1
         store.save_state(state)
