@@ -2,7 +2,8 @@ name: eiass-choan
 
 # 환경영향평가 초안공람 사업지구 자동 추출 (eiass/README.md)
 # 코드는 이 공개 저장소, 결과는 비공개 저장소(wood-land/wood-land-data-db)의 eiass/ 폴더.
-# Secrets: DATA_DB_TOKEN(news 와 같음), VWORLD_API_KEY(news 와 같음), VWORLD_DOMAIN(선택: 브이월드 키 발급 때 적은 서비스 URL)
+# Secrets: DATA_DB_TOKEN·VWORLD_API_KEY·KAKAO_REST_API_KEY(news 와 같음), VWORLD_DOMAIN(선택)
+# 러너(미국 IP)에서는 브이월드가 막혀(2026-10-25) 위성영상은 Esri, 위치·PNU 는 카카오로 대신한다. 선 도면(지적 정합)은 국내 IP PC 몫.
 
 on:
   schedule:
@@ -48,6 +49,7 @@ jobs:
       PYTHONIOENCODING: utf-8
       VWORLD_API_KEY: ${{ secrets.VWORLD_API_KEY }}
       VWORLD_DOMAIN: ${{ secrets.VWORLD_DOMAIN }}
+      KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}   # 브이월드가 막힌 러너(미국 IP)에서 위치·PNU 대체
     steps:
       - uses: actions/checkout@v4
 
