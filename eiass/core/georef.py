@@ -28,10 +28,9 @@ def apply(A, pts):
 
 
 # ---------------- 항공사진 배경 ----------------
-def sift_georef(img, feat_mask, box, s_est, lon, lat, half_m, log=print):
+def _sift_once(img, feat_mask, box, s_est, lon, lat, half_m, target, log=print):
     """s_est: 도면 쪽 px 하나의 지상 길이(m) 추정(계획면적/추출면적). 반환 dict 또는 None"""
     x0b, y0b, x1b, y1b = box
-    target = max(1.0, min(6.0, s_est * 1.5))
     f = target / s_est                                  # 쪽 px -> 축소 px 배율(>=1 이면 줄임)
     sub = img[y0b:y1b, x0b:x1b]
     D = cv2.resize(sub, None, fx=1 / f, fy=1 / f, interpolation=cv2.INTER_AREA)
@@ -57,6 +56,8 @@ def sift_georef(img, feat_mask, box, s_est, lon, lat, half_m, log=print):
     if M is None:
         return {"ok": False, "reason": "RANSAC 실패"}
     inl = inl.ravel().astype(bool)
+    if math.hypot(M[0, 0], M[1, 0]) < 1e-6 or inl.sum() < 4:
+        return {"ok": False, "reason": "RANSAC 퇴화(대응점이 한곳에 몰림)", "inliers": int(inl.sum())}
     resid = np.hypot(*((np.c_[pa[inl], np.ones(inl.sum())] @ M.T) - pb[inl]).T)
     scale = math.hypot(M[0, 0], M[1, 0])
     exp_scale = (s_est * f) / (sres * math.cos(math.radians(lat)))
@@ -69,6 +70,24 @@ def sift_georef(img, feat_mask, box, s_est, lon, lat, half_m, log=print):
            "rot_deg": float(math.degrees(math.atan2(M[1, 0], M[0, 0]))),
            "sat": (S, sx0, sy0, sres)}
     return out
+
+
+def sift_georef(img, feat_mask, box, s_est, lon, lat, half_m, log=print):
+    """해상도를 바꿔 가며(도면 화질·영상 차이에 따라 잘 맞는 배율이 다르다) 가장 믿을 만한 결과를 고른다."""
+    best = None
+    for k in (1.5, 3.0, 1.0):
+        target = max(1.0, min(8.0, s_est * k))
+        r = _sift_once(img, feat_mask, box, s_est, lon, lat, half_m, target, log)
+        if not r.get("ok"):
+            log(f"    SIFT x{k}: {r.get('reason')}")
+            continue
+        good = r["inliers"] >= 12 and 0.8 <= r["scale_ratio"] <= 1.25 and r["spread"] >= 0.25
+        log(f"    SIFT x{k}: 대응점 {r['inliers']}/{r['matches']} 축척비 {r['scale_ratio']:.3f}")
+        if good:
+            return r
+        if best is None or r["inliers"] > best["inliers"]:
+            best = r
+    return best or {"ok": False, "reason": "SIFT 실패"}
 
 
 # ---------------- 선 도면 배경 ----------------
