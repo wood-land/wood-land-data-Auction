@@ -292,8 +292,11 @@ def process_board(args):
                 for n in notices:
                     if not GX.is_compensation(n):
                         continue
-                    res["comp_notices"] += 1
                     ntitle = GX.notice_title(n)
+                    if GX.is_blacklisted_title(ntitle):  # 고시공고와 같은 제외 단어(수의견적·경미한·군관리계획 등)가 제목에 있으면 수집하지 않는다
+                        res["blacklisted"] = res.get("blacklisted", 0) + 1
+                        continue
+                    res["comp_notices"] += 1
                     rows = GX.extract_rows(n, regions, site_name=b["city"], source_file=att["name"], title=ntitle,
                                            collected_at=dt.datetime.now().isoformat(timespec="seconds"),
                                            default_sido=default_sido, default_sigun=default_sigun)
@@ -333,6 +336,8 @@ def process_board(args):
         res["detail"] += f" | OCR {stat['ocr']}건, 미리보기 {stat['preview']}건, OCR 출처 행 {res['ocr_rows']}건"
     if res["skipped"]:
         res["detail"] += f" | 이미 처리한 글 {res['skipped']}건 건너뜀"
+    if res.get("blacklisted"):
+        res["detail"] += f" | 제외 단어 공고 {res['blacklisted']}건 건너뜀"
     if res["errors"]:
         res["detail"] += f" | 오류 {len(res['errors'])}건"
     return res

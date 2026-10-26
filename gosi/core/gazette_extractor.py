@@ -220,6 +220,15 @@ def notice_title(notice):
     return " ".join(lines[:3])[:160]
 
 
+def is_blacklisted_title(title):
+    """공고 제목에 제외 단어(cities/_shared.py DEFAULT_BLACKLIST, 고시공고와 같은 목록)가 있으면 True.
+    목차 줄의 점선('······ 153')이 이어지면 그 뒤는 다른 항목의 제목이라 믿을 수 없어 앞부분만 본다."""
+    from cities._shared import DEFAULT_BLACKLIST
+    head = re.split(r"[·…\.\-]{4,}", title or "")[0]
+    t = "".join(head.split())
+    return any("".join(w.split()) in t for w in DEFAULT_BLACKLIST)
+
+
 def is_compensation(notice):
     """제목 부근에 보상 키워드가 있거나, 토지조서/물건조서/보상계획이 본문에 있으면 보상 관련으로 본다."""
     # 공백을 모두 없애고 비교한다(PDF/OCR 본문은 '토지 조서'처럼 글자 사이가 벌어지는 일이 많다)

@@ -86,7 +86,29 @@ class PnuRescue(unittest.TestCase):
         k = self.use({"대구광역시 중구 남산동 2210": [doc("대구", "중구", "남산동", "2711010100", 2210)]})
         pnu, why = self.r.resolve_full("대구광역시 중구 남산3동", "2210", "", "대구광역시청", "", "", "")
         self.assertEqual(why, "ok")
-        self.assertEqual(k.queries[0], "대구광역시 중구 남산동 2210")
+        self.assertIn("대구광역시 중구 남산동 2210", k.queries)  # 원래 질의가 실패한 뒤 번호를 지워 다시 묻는다
+
+    def test_numbered_legal_dong_is_kept(self):
+        """'대저2동' 은 행정동이 아니라 법정동 이름이다 - 번호를 지우면 대저1동 으로 가 버린다."""
+        self.use({"부산광역시 강서구 대저2동 464-1": [doc("부산", "강서구", "대저2동", "2644010200", 464, 1)],
+                  "부산광역시 강서구 대저동 464-1": [doc("부산", "강서구", "대저1동", "2644010100", 464, 1)]})
+        pnu, why = self.r.resolve_full("부산광역시 강서구 대저2동", "464-1", "", "낙동강유역환경청", "", "", "")
+        self.assertEqual(pnu, "2644010200104640001")
+
+    def test_region_agreement(self):
+        self.assertTrue(P.region_agrees("경기도 광주시 송정동", "광주시"))
+        self.assertFalse(P.region_agrees("경기도 광주시 송정동", "이천시"))  # 같은 이름의 동이 다른 시에 있어도 받지 않는다
+        self.assertTrue(P.region_agrees("경기도 용인특례시 인구이동읍", "용인시 처인구"))
+        self.assertTrue(P.region_agrees("대구광역시 중구 남산동", "중구"))
+        self.assertTrue(P.region_agrees("충청북도 단양군 당동", ""))
+        self.assertTrue(P.region_agrees("강원도 당동", "단양군"))  # 시군구 이름이 없으면 확인할 게 없다
+
+    def test_wrong_city_lookalike_is_not_accepted(self):
+        """경기도 광주시 송정동 187 이 광주시에 없을 때 카카오가 돌려주는 이천시 송정동 187 을 받으면 엉뚱한 PNU 가 된다."""
+        self.use({"경기도 광주시 송정동 187": [doc("경기", "이천시", "송정동", "4150011000", 187)],
+                  "경기도 송정동 187": [doc("경기", "이천시", "송정동", "4150011000", 187)]})
+        pnu, why = self.r.resolve_full("경기도 광주시 송정동", "187", "", "광주시", "", "", "")
+        self.assertNotEqual(pnu, "4150011000101870000")
 
     def test_garbage_rows_are_not_parcels(self):
         for soj in ("사 용 기 간 사용승인 허가일 ~ 2035", "사. 입찰가격 평점산식의 A값: 금 1"):

@@ -102,6 +102,17 @@ def apply_aliases(sojaeji, city):
     return " ".join(table.get(w, w) for w in (sojaeji or "").split())
 
 
+def region_agrees(sojaeji, region2):
+    """소재지에 시·군·구 이름이 적혀 있으면 카카오 결과의 시군구(region_2depth_name)가 그것과 같아야 한다.
+    카카오는 그 시군구에 없는 지번이면 비슷한 이름의 다른 지역(경기도 광주시 송정동 187 -> 이천시 송정동 187)을 돌려주는데,
+    지번 숫자만 맞는다고 받으면 엉뚱한 지역의 PNU 가 저장된다(2026-10-27 감사에서 발견). 소재지에 시군구 이름이 없으면 확인할 게 없어 통과."""
+    names = [w for w in (sojaeji or "").split()
+             if re.fullmatch(r"[가-힣]{1,6}[시군구]", w) and not re.search(r"(특별시|광역시|특별자치시)$", w)]
+    if not names or not region2:
+        return True
+    return all(re.sub(r"(특례시|[시군구])$", "", w) in region2 for w in names)
+
+
 def repair_concat_sigun(sojaeji, context):
     """'경상북도 안동시 택시안중읍 학현리'처럼 시군 이름의 첫 글자가 빠진 채 읍·면에 붙은 단어('택시안중읍' = 평택시 안중읍)를
     게시글 제목·사업명(context)에 나온 이름('평택')으로 되살려 '평택시 안중읍 학현리' 로 바꾼다. 후보가 하나일 때만 고친다."""
@@ -168,6 +179,11 @@ class PnuResolver:
         parts = [r1, a.get("region_2depth_name", ""), a.get("region_3depth_name", "")]
         tail = f"{'산' if mountain else ''}{main}" + (f"-{sub}" if sub else "")
         return " ".join(x for x in parts + [tail] if x)
+
+    @staticmethod
+    def region_ok_for(sojaeji, full):
+        """소재지에 적힌 시군구가 카카오 정식 주소('경기도 광주시 송정동 528-15')의 시군구 부분과 같은가(감사용)."""
+        return region_agrees(sojaeji, " ".join(full.split()[:3]))
 
     @staticmethod
     def _match(doc, want):
@@ -249,7 +265,6 @@ class PnuResolver:
         1차: 소재지+지번 그대로. 실패하면 2차: 읍면동·리·지번만으로 전국 검색해 지번이 일치하고 후보가 하나로 정해질 때만 인정
         (여러 지역에 같은 이름이 있으면 context(게시글 제목 등)에 나오는 시도·시군구로 가린다)."""
         sojaeji = apply_aliases(sojaeji, city)  # 사용자가 확인한 지명 바로잡기(place_aliases.json)
-        sojaeji = re.sub(r"(?<=[가-힣])\d(?=동(?:\s|$))", "", sojaeji or "")  # 행정동 번호('남산3동')는 법정동('남산동')에 없다
         query = build_query(sojaeji, jibun)
         if not query:
             self.stats["fail"] += 1
@@ -272,7 +287,7 @@ class PnuResolver:
         pnu, status, full = None, "no_match_v4", ""
         for d in data.get("documents", []):
             m = self._match(d, want)
-            if m:
+            if m and region_agrees(sojaeji, m[2]):
                 pnu, status, full = m[0], "ok", m[3]
                 break
         if not pnu:
@@ -311,11 +326,25 @@ class PnuResolver:
                     cands = {m[0]: m for m in hit} if len(hit) == 1 else {}
                 if len(cands) == 1:
                     pnu = next(iter(cands))
-                    status, full = "ok_fallback", cands[pnu][3]
+                    if city and city.endswith(("시", "군")) and not region_agrees(city, cands[pnu][2]):
+                        pnu = None  # 수집한 지자체(city)와 다른 시군의 같은 이름 동·리가 유일하다고 받으면 엉뚱한 지역이 된다
+                    else:
+                        status, full = "ok_fallback", cands[pnu][3]
         if not pnu:
             pnu = self._swap_eupmyeon(sojaeji, jibun, want)  # 읍·면 승격/개편으로 문서의 이름과 지금 이름이 다른 경우
             if pnu:
                 status, full = "ok_swap", self.last_full
+        if not pnu and re.search(r"[가-힣]\d동(?:\s|$)", sojaeji or ""):
+            # 행정동 번호('남산3동')는 법정동('남산동')에 없다. 단, '대저2동'처럼 번호가 법정동 이름인 곳이 있어 원래 질의가 실패했을 때만 지운다
+            stripped = re.sub(r"(?<=[가-힣])\d(?=동(?:\s|$))", "", sojaeji)
+            data_s, state_s = self._call(build_query(stripped, jibun))
+            self.stats["api"] += 1
+            if state_s == "ok":
+                for d in data_s.get("documents", []):
+                    m = self._match(d, want)
+                    if m and region_agrees(stripped, m[2]):
+                        pnu, status, full = m[0], "ok_dongnum", m[3]
+                        break
         if not pnu:
             pnu = self._ri_only_lookup(sojaeji, jibun, city, want)  # 읍·면이 틀리게 적힌 경우(시군 + 리 + 지번이 유일하게 맞을 때)
             if pnu:
