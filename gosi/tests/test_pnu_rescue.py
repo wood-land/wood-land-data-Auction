@@ -111,8 +111,13 @@ class PnuRescue(unittest.TestCase):
         self.assertNotEqual(pnu, "4150011000101870000")
 
     def test_garbage_rows_are_not_parcels(self):
-        for soj in ("사 용 기 간 사용승인 허가일 ~ 2035", "사. 입찰가격 평점산식의 A값: 금 1"):
+        for soj in ("사 용 기 간 사용승인 허가일 ~ 2035", "사. 입찰가격 평점산식의 A값: 금 1",
+                    "면 적 249", "토지등소유자 수 537", "○ 대지면적 : 6"):
             self.assertEqual(self.r.resolve_full(soj, "1", "", "진천군", "", "", "")[1], "not_parcel")
+
+    def test_real_addresses_are_not_mistaken_for_garbage(self):
+        for soj in ("충청북도 단양군 대강면 당동리", "경기도 안성시 공도읍 개정리", "충청남도 홍성군 서부면 면적리"):
+            self.assertFalse(P.looks_like_non_parcel(soj), soj)
 
 
 if __name__ == "__main__":

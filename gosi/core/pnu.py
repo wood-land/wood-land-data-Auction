@@ -84,7 +84,8 @@ def build_query(sojaeji, jibun):
 
 
 _ALIAS_FILE = Path(__file__).with_name("place_aliases.json")  # 사용자가 확인한 지명 바로잡기: {"지자체": {"잘못 읽힌 이름": "정상 이름"}}
-_NOT_PARCEL_RE = re.compile(r"합\s*계|소\s*계|\(\s*\d+\s*필지\s*\)|필지\s*\)|(?:로|일|월|년)\s*부터|^\s*\d+\s*$|사\s*용\s*기\s*간|평점산식|입찰가격")
+_NOT_PARCEL_RE = re.compile(r"합\s*계|소\s*계|\(\s*\d+\s*필지\s*\)|필지\s*\)|(?:로|일|월|년)\s*부터|^\s*\d+\s*$|사\s*용\s*기\s*간|평점산식|입찰가격"
+                             r"|^\s*[○◉●■▣◆◇▶▷□▪\-\*·]*\s*(?:대\s*지\s*)?면\s*적(?![가-힣])|토\s*지\s*등?\s*소\s*유\s*자\s*수")  # 표 머리글 조각('면 적 249', '토지등소유자 수 537', 수원 재개발 공고)
 
 
 def load_aliases():
