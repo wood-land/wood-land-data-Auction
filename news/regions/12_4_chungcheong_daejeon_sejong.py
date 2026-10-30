@@ -236,7 +236,9 @@ SITES = [
         list_item_sel="table tr td, table tr, div.list-block, #section-list li",
         list_title_sel="a[href*='articleView.html']",
         list_date_sel="span.byline em:last-child",
-        article_date_sel="td.com, ul.infomation",
+        # 표 레이아웃이라 날짜 칸에 클래스가 없다: [호수] 2026년 08월 27일 (목) 17:40:07 (회색 배경 칸).
+        # 예전 선택자 td.com 은 머리말의 갱신 시각(2026.10.26 월 22:19)을 잡아 모든 기사가 최근 날짜로 읽혔다.
+        article_date_sel='td[bgcolor="EFEFEF"]',
         article_body_sel="#articleBody, td.view_r",
         link_contains="articleView.html",
         homepage_url="http://www.e-gongju.com",

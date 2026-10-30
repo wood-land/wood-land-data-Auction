@@ -14,6 +14,10 @@ pnu_pipeline.py - 신문 기사 추출 결과(CSV/엑셀) → 주소 완성 → 
 
   # 4. 단일 주소 테스트
   python pnu_pipeline.py --test "지정면 신평리 400" --hint "원주시"
+
+  # 5. 이미 DB 에 쌓인 실패 주소(NOT_FOUND/ERROR)를 현재 로직으로 다시 조회해 고치기
+  python pnu_pipeline.py --repair-db output/news_articles_pnu.db --dry-run   # 먼저 결과만 확인
+  python pnu_pipeline.py --repair-db output/news_articles_pnu.db             # 실제로 DB 갱신
 """
 
 import argparse
@@ -28,7 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from common.pnu_resolver import PNUResolver, complete_korean_address  # noqa: E402
+from common.pnu_resolver import PNUResolver, build_context  # noqa: E402
 
 
 def find_latest_csv(directory: str) -> Optional[str]:
@@ -69,7 +73,7 @@ def process_csv_file(input_csv: str, db_path: str, output_csv: Optional[str] = N
         reader = list(csv.DictReader(infile))
 
     fieldnames = list(reader[0].keys()) if reader else []
-    for col in ["완성주소", "PNU", "PNU발급출처", "표준주소명"]:
+    for col in ["완성주소", "PNU", "PNU발급출처", "표준주소명", "주소근거"]:
         if col not in fieldnames:
             fieldnames.append(col)
 
@@ -98,6 +102,7 @@ def process_csv_file(input_csv: str, db_path: str, output_csv: Optional[str] = N
         pnu_list = []
         source_list = []
         std_name_list = []
+        basis_list = []
 
         for raw_addr in addr_list:
             total_addrs += 1
@@ -105,17 +110,18 @@ def process_csv_file(input_csv: str, db_path: str, output_csv: Optional[str] = N
                 raw_addr=raw_addr,
                 area_hint=area_hint,
                 paper=paper,
-                context_text=f"{title} {body[:200]}"
+                context_text=build_context(title, body)
             )
             pnu_results.append(res)
             completed_list.append(res.completed_address)
             pnu_list.append(res.pnu or "")
             source_list.append(res.source)
             std_name_list.append(res.standard_name)
+            basis_list.append(res.basis)
 
             if res.status == "SUCCESS" and res.pnu:
                 success_pnus += 1
-                print(f"  ✔ [{paper}] '{raw_addr}' → '{res.completed_address}' → PNU: {res.pnu} ({res.source})")
+                print(f"  ✔ [{paper}] '{raw_addr}' → '{res.completed_address}' → PNU: {res.pnu} ({res.source}, 근거:{res.basis})")
             else:
                 print(f"  ✘ [{paper}] '{raw_addr}' → '{res.completed_address}' → 실패: {res.error_message}")
 
@@ -142,6 +148,7 @@ def process_csv_file(input_csv: str, db_path: str, output_csv: Optional[str] = N
         new_row["PNU"] = " | ".join(pnu_list)
         new_row["PNU발급출처"] = " | ".join(source_list)
         new_row["표준주소명"] = " | ".join(std_name_list)
+        new_row["주소근거"] = " | ".join(basis_list)
         output_rows.append(new_row)
 
     # 파일 출력
@@ -187,7 +194,22 @@ def main():
     parser.add_argument("--out", "-o", help="결과를 저장할 CSV 파일 경로")
     parser.add_argument("--test", help="단일 주소 테스트 (예: '지정면 신평리 400')")
     parser.add_argument("--hint", default="", help="--test 시 함께 제공할 지역힌트 (예: '원주시')")
+    parser.add_argument("--repair-db", metavar="DB경로", help="DB 에 쌓인 실패 주소(NOT_FOUND/ERROR)를 현재 로직으로 다시 조회해 고친다")
+    parser.add_argument("--dry-run", action="store_true", help="--repair-db 에서 DB 는 바꾸지 않고 결과만 출력")
+    parser.add_argument("--limit", type=int, default=0, help="--repair-db 에서 처리할 최대 행 수 (0=전체)")
     args = parser.parse_args()
+
+    if args.repair_db:
+        if not os.path.isfile(args.repair_db):
+            print(f"❌ DB 파일을 찾을 수 없습니다: {args.repair_db}")
+            return
+        resolver = PNUResolver(db_path=args.repair_db)
+        print(f"\n[실패 주소 재처리] DB: {args.repair_db}{' (dry-run: 저장하지 않음)' if args.dry_run else ''}")
+        stats = resolver.repair_failed_addresses(limit=args.limit, dry_run=args.dry_run)
+        resolver.close()
+        print(f"\n  확인 {stats['checked']}건 → 해결 {stats['fixed']}건, 여전히 실패 {stats['still_failed']}건, "
+              f"중복이라 삭제 {stats['duplicates_removed']}건")
+        return
 
     if args.test:
         resolver = PNUResolver(db_path=args.db)
@@ -200,6 +222,7 @@ def main():
         print(f"  표준 명칭: {res.standard_name}")
         print(f"  좌표: x={res.x}, y={res.y}")
         print(f"  상태: {res.status} {res.error_message}")
+        print(f"  시군구 근거: {res.basis}")
         resolver.close()
         return
 

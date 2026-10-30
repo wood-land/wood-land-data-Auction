@@ -25,7 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from common.pnu_resolver import complete_korean_address
+from common.pnu_resolver import build_context, complete_korean_address, parse_address
 
 
 def find_latest_csv(directory: str) -> Optional[str]:
@@ -59,7 +59,7 @@ def clean_and_complete_addresses(raw_addrs_str: str, area_hint: str, paper: str,
     parts = [p.strip().strip("'\"") for p in parts if p.strip()]
 
     results: List[Tuple[str, str]] = []
-    context = f"{title} {body[:400]}"
+    context = build_context(title, body)     # PNU 단계(pnu_pipeline)와 같은 문맥을 써야 두 단계의 완성 주소가 같다
     for p in parts:
         raw_clean = clean_address_text(p)
         comp = complete_korean_address(p, area_hint=area_hint, paper=paper, context_text=context)
@@ -106,7 +106,11 @@ def deduplicate_news_records(records: List[dict]) -> Tuple[List[dict], int]:
     for r in exploded_records:
         comp_str = r.get("완전주소", "").strip()
         if comp_str:
-            addr_groups.setdefault(comp_str, []).append(r)
+            # 시·도/시군구가 없는 주소('마산리 46-1')는 지역이 다른 같은 이름의 주소일 수 있으므로 신문사끼리 합치지 않는다
+            parsed = parse_address(comp_str)
+            has_region = bool(parsed and (parsed.prov or parsed.sg))
+            key = comp_str if has_region else f"{r.get('신문사', '')}|{comp_str}"
+            addr_groups.setdefault(key, []).append(r)
         else:
             no_addr_records.append(r)
 

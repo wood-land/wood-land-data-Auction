@@ -37,47 +37,58 @@ from urllib.parse import quote, urljoin
 import pandas as pd
 from bs4 import BeautifulSoup
 
+from common.admin_names import NON_PLACE_DONGRI, is_place_eupmyeon, peel_sigungu_suffix
+
 # ============================ 지번 주소 추출 ============================
-# 패턴: (읍/면 이름)? + (동/리/가로 끝나는 지명) + (산)?번지수(-번지수)? + (번지)?
-# 예: '문막읍 후용리 1153', '황지동 산 143-1번지', '온의동 산43-3번지'
+# 패턴: (읍/면 이름)? + (동/리 지명 | 'N가' 지명) + (산)?번지수(-번지수)? + (번지)?
+# 예: '문막읍 후용리 1153', '황지동 산 143-1번지', '온의동 산43-3번지', '종로3가 12번지'
+# - 읍/면은 앞이 한글이 아닐 때만 시작으로 본다 ('~에 따르면'의 '따르면'처럼 지명이 아닌 것은 아래에서 따로 걸러냄)
+# - '가'는 숫자가 붙은 'N가'만 인정한다 ('상가 1', '시가 100'처럼 일반 낱말을 지명으로 오인하던 문제)
 ADDRESS_RE = re.compile(
-    r"(?:[가-힣]{2,6}(?:읍|면)\s*)?[가-힣]{2,8}(?:동|리|가)\s*(?:산\s*)?\d{1,4}(?:-\d{1,4})?(?:\s*번지)?"
+    r"(?P<eup>(?<![가-힣])[가-힣]{2,6}(?:읍|면)\s*)?"
+    r"(?P<dr>[가-힣]{2,8}(?:동|리)|[가-힣]{1,6}\d가)\s*(?:산\s*)?\d{1,4}(?:-\d{1,4})?(?:\s*번지)?"
 )
 ADDRESS_CONTEXT_WORDS = ("일대", "일원")
 
 # 이름이 한 글자인 동/리 (예: '명동 12번지', '중동 100번지 일대', '상리 산 12번지', '화성시 상리 55번지').
 # v2 정규식은 '이름 2글자 이상 + 동/리'만 잡아서 이런 지명을 놓쳤다.
-# - '동/리'만 대상으로 한다 ('가'는 '시가 100'처럼 일반 낱말과 섞여서 제외)
+# - '동/리'만 대상으로 한다
 # - 바로 앞 글자가 한글이면 제외한다 → '봉명동'의 '명동', '사무관리 3'의 '관리'처럼 긴 낱말의 끝부분을 지명으로 오인하지 않음
 # - 인정 기준: '번지'가 붙어 있거나, 숫자 바로 뒤에 '일대/일원'이 이어져야 함 ('거리 5km 일대' 같은 문장 제외)
 ADDRESS_SHORT_RE = re.compile(
-    r"(?:[가-힣]{2,6}(?:읍|면)\s*)?(?<![가-힣])[가-힣](?:동|리)\s*(?:산\s*)?\d{1,4}(?:-\d{1,4})?(?:\s*번지)?"
+    r"(?P<eup>(?<![가-힣])[가-힣]{2,6}(?:읍|면)\s*)?"
+    r"(?P<dr>(?<![가-힣])[가-힣](?:동|리))\s*(?:산\s*)?\d{1,4}(?:-\d{1,4})?(?:\s*번지)?"
 )
-
-# 주소 바로 앞에 붙은 시/군/구 이름 (예: '청주시 흥덕구 ' + '봉명동 123')
-_SIGUNGU_PREFIX_RE = re.compile(r"((?:[가-힣]{2,4}[시군]\s*)?(?:[가-힣]{1,4}구\s*)?)$")
-# 시/군/구로 끝나지만 지명이 아닌 흔한 단어 ('당시', '일시', '지구' 등) - 앞 단서에서 제외
-_PREFIX_STOPWORDS = {"당시", "동시", "일시", "임시", "수시", "현시", "평시", "정시", "매시", "부시",
-                     "이시", "구시", "지구", "단지"}
 
 
 def _sigungu_before(text: str, pos: int) -> str:
-    seg = text[max(0, pos - 14):pos]
-    m = _SIGUNGU_PREFIX_RE.search(seg)
-    if not m:
-        return ""
-    prefix = re.sub(r"\s+", " ", m.group(1)).strip()
-    if not prefix or any(tok in _PREFIX_STOPWORDS for tok in prefix.split()):
-        return ""
+    """주소 바로 앞에 붙은 시/군/구 (예: '청주시 흥덕구 ' + '봉명동 123').
+    실제 행정구역 이름 사전으로 확인하므로 '사업지구', '집중호우시' 같은 낱말은 붙지 않는다."""
+    _, prefix = peel_sigungu_suffix(text[max(0, pos - 30):pos], with_province=True)
     return prefix
+
+
+def _clean_match(m: "re.Match") -> Tuple[str, int]:
+    """매칭된 주소를 정리하고 (주소, 시작 위치) 를 돌려준다. 지명이 아닌 읍/면 접두어는 떼어낸다.
+    지명이 아닌 동/리 낱말('활동 3건', '관리 5곳')이면 ('', 0)."""
+    dr = m.group("dr")
+    if dr in NON_PLACE_DONGRI:
+        return "", 0
+    eup = m.group("eup")
+    start = m.start()
+    text = m.group(0)
+    if eup is not None and not is_place_eupmyeon(eup.strip()):
+        text = text[len(eup):]               # '따르면 동대동 489-52' -> '동대동 489-52'
+        start += len(eup)
+    return re.sub(r"\s+", " ", text).strip(), start
 
 
 def extract_addresses(text: Optional[str]) -> List[str]:
     """본문에서 지번 주소를 뽑는다.
     '번지'가 붙어 있거나, 매칭 직후 몇 글자 안에 '일대'/'일원'이 있어야 '지번이 특정된' 것으로 본다.
-    (동/리/가 지명 뒤에 숫자가 바로 안 나오면 애초에 매칭되지 않으므로,
+    (동/리 지명 뒤에 숫자가 바로 안 나오면 애초에 매칭되지 않으므로,
      '~일대에서 열렸다'처럼 지번 없이 '일대'만 쓰인 문장은 자동으로 걸러진다.)
-    주소 바로 앞에 시/군/구 이름이 있으면 함께 붙여서 돌려준다."""
+    주소 바로 앞에 실제 시/군/구 이름이 있으면 함께 붙여서 돌려준다."""
     text = text or ""
     matches = [(m, False) for m in ADDRESS_RE.finditer(text)]
     long_spans = [(m.start(), m.end()) for m, _ in matches]
@@ -88,7 +99,9 @@ def extract_addresses(text: Optional[str]) -> List[str]:
 
     found: List[str] = []
     for m, is_short in matches:
-        addr = re.sub(r"\s+", " ", m.group(0)).strip()
+        addr, start = _clean_match(m)
+        if not addr:
+            continue
         has_bunji = "번지" in addr
         if is_short:
             # 한 글자 지명은 '거리 5km 일대', '이동 3km 일원'처럼 일반 문장과 섞이기 쉬우므로
@@ -97,7 +110,7 @@ def extract_addresses(text: Optional[str]) -> List[str]:
         else:
             near = any(w in text[m.end(): m.end() + 6] for w in ADDRESS_CONTEXT_WORDS)
         if has_bunji or near:
-            prefix = _sigungu_before(text, m.start())
+            prefix = _sigungu_before(text, start)
             full = f"{prefix} {addr}" if prefix else addr
             if full not in found:
                 found.append(full)
@@ -106,7 +119,7 @@ def extract_addresses(text: Optional[str]) -> List[str]:
 
 # ============================ 날짜 처리 ============================
 _D = r"(\d{2,4})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})일?"
-_INPUT_RES = [re.compile(r"(?:입력|발행일)\s*:?\s*" + _D), re.compile(r"(?:승인|등록|작성)\s*:?\s*" + _D)]
+_INPUT_RES = [re.compile(r"(?:입력|발행일)\s*:?\s*" + _D), re.compile(r"(?:승인|등록|작성)일?\s*:?\s*" + _D)]   # '등록일', '작성일' 도 라벨
 _MODIFIED_RE = re.compile(r"(?:수정|최종편집)\s*:?\s*" + _D)
 _ANY_DATE_RE = re.compile(_D)
 
@@ -118,15 +131,18 @@ def _fmt(m: "re.Match") -> str:
     return f"{year:04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
 
 
-def parse_article_dates(date_info_text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+def parse_article_dates_ex(date_info_text: Optional[str]) -> Tuple[Optional[str], Optional[str], bool]:
     """'입력 : 2026-09-17 00:05:00 수정 : 2026-09-17 00:06:17' 또는 '입력 2026.09.18 16:45'
-    → (입력일, 수정일)  ('YYYY-MM-DD' 형식으로 통일)"""
+    → (입력일, 수정일, 입력일에 '입력/등록/승인…' 라벨이 붙어 있었는가)  ('YYYY-MM-DD' 형식으로 통일)
+    라벨 없이 문서에서 처음 나온 날짜는 기사 날짜가 아닐 수 있다(사이트 머리말의 현재 시각 등)."""
     text = re.sub(r"\s+", " ", date_info_text or "")
     ins = None
+    labeled = False
     for rx in _INPUT_RES:
         m = rx.search(text)
         if m:
             ins = _fmt(m)
+            labeled = True
             break
     mod = _MODIFIED_RE.search(text)
     if not ins:
@@ -134,7 +150,13 @@ def parse_article_dates(date_info_text: Optional[str]) -> Tuple[Optional[str], O
         any_date = _ANY_DATE_RE.search(prefix)
         if any_date:
             ins = _fmt(any_date)
-    return ins, (_fmt(mod) if mod else None)
+    return ins, (_fmt(mod) if mod else None), labeled
+
+
+def parse_article_dates(date_info_text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """(입력일, 수정일). 라벨 여부가 필요하면 parse_article_dates_ex 를 쓴다."""
+    ins, mod, _ = parse_article_dates_ex(date_info_text)
+    return ins, mod
 
 
 def pick_reference_date(input_date, modified_date):
@@ -266,25 +288,65 @@ def _meta_content(soup: BeautifulSoup, name: str) -> str:
     return (tag.get("content") or "").strip() if tag else ""
 
 
+_META_PUBLISHED = ("article:published_time", "og:pubdate", "pubdate", "regDate", "author:pubdate")
+_META_MODIFIED = ("article:modified_time", "og:updated_time", "lastmod")
+
+
+def _meta_dates(soup: BeautifulSoup, html: str) -> Tuple[Optional[str], Optional[str]]:
+    """메타 태그 / JSON-LD 에 들어 있는 (발행일, 수정일). 사람이 읽는 화면 요소보다 믿을 만하다."""
+    ins = mod = None
+    for name in _META_PUBLISHED:
+        v = _meta_content(soup, name)
+        if v:
+            ins = parse_article_dates(v)[0]
+            if ins:
+                break
+    for name in _META_MODIFIED:
+        v = _meta_content(soup, name)
+        if v:
+            mod = parse_article_dates(v)[0]
+            if mod:
+                break
+    if not ins:
+        m = re.search(r'"datePublished"\s*:\s*"(\d{4})-(\d{2})-(\d{2})', html or "")
+        if m:
+            ins = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    if not mod:
+        m = re.search(r'"dateModified"\s*:\s*"(\d{4})-(\d{2})-(\d{2})', html or "")
+        if m:
+            mod = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    return ins, mod
+
+
 def parse_article(html: str, site: Site) -> dict:
-    """기사 HTML → {'input_date','modified_date','body','area'}"""
+    """기사 HTML → {'input_date','modified_date','body','area','date_source','date_conflict'}
+
+    기사 날짜를 믿는 순서
+      1. 선택자가 잡은 요소에 '입력/등록/승인…' 라벨이 붙은 날짜가 있으면 그것 (사람이 읽는 화면의 명시적 표기)
+      2. 메타 태그(article:published_time 등)·JSON-LD 의 발행일
+      3. 라벨 없이 선택자가 잡은 첫 날짜 (최후 수단)
+    선택자를 'td, span, div'처럼 넓게 잡은 신문사는 문서에서 처음 나온 요소(사이트 머리말의 '오늘 날짜' 시계 등)를
+    잡기 쉽다. 이때 라벨 없는 날짜를 그대로 쓰면 2019년 기사도 '오늘 입력'으로 읽혀 최근 기사로 수집되므로,
+    라벨이 없으면 메타 태그를 우선한다."""
     soup = BeautifulSoup(html or "", "html.parser")
     clean_popup_elements(soup)
     date_el = soup.select_one(site.article_date_sel)
     date_text = (date_el.get("content") or date_el.get("datetime") or
                  date_el.get_text(" ")) if date_el is not None else ""
-    input_date, modified_date = parse_article_dates(date_text)
+    input_date, modified_date, labeled = parse_article_dates_ex(date_text)
+    meta_in, meta_mod = _meta_dates(soup, html)
 
-    # 폴백: 날짜 엘리먼트에서 못 찾았을 경우 메타 태그 확인
-    if not input_date:
-        for m_name in ("article:published_time", "og:pubdate", "pubdate", "regDate", "author:pubdate"):
-            mv = _meta_content(soup, m_name)
-            if mv:
-                m_in, m_mod = parse_article_dates(mv)
-                if m_in:
-                    input_date = input_date or m_in
-                    modified_date = modified_date or m_mod
-                    break
+    date_source = "선택자(라벨)" if (input_date and labeled) else ""
+    date_conflict = ""
+    if not (input_date and labeled) and meta_in:
+        if input_date and input_date != meta_in:
+            date_conflict = f"선택자 날짜 {input_date} ≠ 메타 날짜 {meta_in}"
+        input_date, modified_date = meta_in, (meta_mod or modified_date)
+        date_source = "메타"
+    elif input_date and not labeled:
+        date_source = "선택자(라벨 없음)"
+    if input_date and not modified_date and meta_mod and meta_mod != input_date and date_source != "메타":
+        modified_date = meta_mod
 
     body_el = soup.select_one(site.article_body_sel)
     body = element_text(body_el) if body_el is not None else ""
@@ -307,7 +369,8 @@ def parse_article(html: str, site: Site) -> dict:
             parts.append(v)
     return {"input_date": input_date, "modified_date": modified_date,
             "body": body, "area": " ".join(parts), "has_date_el": date_el is not None,
-            "has_body_el": (body != "(본문 추출 실패)")}
+            "has_body_el": (body != "(본문 추출 실패)"),
+            "date_source": date_source, "date_conflict": date_conflict}
 
 
 # ============================ 페이지 가져오기 ============================
@@ -648,7 +711,11 @@ class Crawler:
         art = parse_article(ahtml, site)
         ok = True
         ref, kind = pick_reference_date(art["input_date"], art["modified_date"])
-        print(f"  {'✔' if ref else '✘'} 기사 날짜: 입력 {art['input_date']} / 수정 {art['modified_date']} → 기준 {ref}({kind})")
+        print(f"  {'✔' if ref else '✘'} 기사 날짜: 입력 {art['input_date']} / 수정 {art['modified_date']} → 기준 {ref}({kind}) [출처: {art['date_source'] or '없음'}]")
+        if art["date_conflict"]:
+            print(f"  ⚠ {art['date_conflict']} → article_date_sel 이 기사 날짜가 아닌 요소(머리말 시계 등)를 잡고 있다. 메타 날짜를 대신 사용했지만 선택자를 좁히는 것이 좋다.")
+        elif art["date_source"] == "선택자(라벨 없음)":
+            print("  ⚠ 날짜에 '입력/등록' 라벨이 없고 메타 태그도 없어 올바른 날짜인지 확인할 수 없다 → 기사 화면과 직접 대조해 볼 것.")
         ok &= bool(ref)
         body_ok = art["has_body_el"] and len(art["body"]) > 50
         print(f"  {'✔' if body_ok else '✘'} 본문 {len(art['body'])}자: {art['body'][:50]!r}")

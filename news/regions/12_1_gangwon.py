@@ -32,6 +32,7 @@ SITES = [
     # '기사 열기 오류'가 잦았는데, requests로 바꾸면 그 원인 자체가 사라진다.
     Site(
         name="강원일보",
+        default_area="강원특별자치도",     # 지역힌트: 기사 주소의 시군구를 정하는 1순위 단서
         search_url=(
             "https://www.kwnews.co.kr/search/detailSearch?searchType=detail&organization="
             "&searchRange=title_subtitle_body_reporterName&storyClass=&searchMedia=all"
@@ -77,6 +78,7 @@ SITES = [
     # 보상 검색은 20건, 무작위 대조 검색은 0건이었고 목록·기사 날짜·본문 선택자를 확인했다.
     Site(
         name="원주신문",
+        default_area="원주시",     # 지역힌트: 기사 주소의 시군구를 정하는 1순위 단서
         search_url="https://www.iwjnews.com/news/articleList.html",
         list_item_sel="div.list-block",
         list_title_sel="div.list-titles a",
@@ -111,6 +113,7 @@ SITES = [
     #   틀리면 브라우저 개발자도구로 실제 컨테이너를 찾아 교체할 것.
     Site(
         name="홍천뉴스투데이",
+        default_area="홍천군",     # 지역힌트: 기사 주소의 시군구를 정하는 1순위 단서
         search_url=(
             "https://www.hongcheonnewstoday.kr/search.html"
             "?submit=submit&search_and=1&search_exec=all&search_section=all"
@@ -166,6 +169,7 @@ SITES = [
     #   않을 확률이 높다. 로컬에서 브라우저로 검색 시 진짜 요청 URL을 확인해서 교체할 것.
     Site(
         name="횡성뉴스",
+        default_area="횡성군",     # 지역힌트: 기사 주소의 시군구를 정하는 1순위 단서
         search_url="http://www.hsgnews.net/default/search_list.php?search_order={kw}&page={page}",  # ⚠ 미검증 추정 URL
         list_item_sel="td.f10_b",
         list_title_sel="a",
@@ -188,6 +192,7 @@ SITES = [
     #   메커니즘을 확인하지 못했다.
     Site(
         name="강릉뉴스",
+        default_area="강릉시",     # 지역힌트: 기사 주소의 시군구를 정하는 1순위 단서
         search_url="https://www.gangneungnews.kr/news/articleList.html?page={page}&sc_area=A&view_type=sm&sc_word={kw}",
         list_item_sel="#section-list ul.type2 > li",
         list_title_sel="h4.titles a",
@@ -227,6 +232,7 @@ SITES = [
     # POST 검색(q)에서 키워드 결과와 기사 본문·날짜를 확인해 새 경로·선택자로 이식했다.
     Site(
         name="태백인터넷신문",
+        default_area="태백시",     # 지역힌트: 기사 주소의 시군구를 정하는 1순위 단서
         search_url="http://tjinews.co.kr/index.do?menu_id=00000121",
         list_item_sel="ul#newsList > li",
         list_title_sel="a[href*='ARTICLE_']",

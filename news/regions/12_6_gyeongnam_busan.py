@@ -45,7 +45,7 @@ def _ndsoft_verified(name: str, area: str, base_url: str,
     )
 
 
-def _iksan_verified(name: str, area: str, base_url: str, note: str = "") -> Site:
+def _iksan_verified(name: str, area: str, base_url: str, note: str = "", date_sel: str = "td, span, div") -> Site:
     """익산신문 솔루션 기반 실측 검증 통과 신문사 생성 (창녕, 고성, 의령)"""
     return Site(
         name=name,
@@ -53,7 +53,7 @@ def _iksan_verified(name: str, area: str, base_url: str, note: str = "") -> Site
         list_item_sel="td[align='center'] table tr, table tr",
         list_title_sel="a[href*='index_view_page.php']",
         list_date_sel="",
-        article_date_sel="td, span, div",
+        article_date_sel=date_sel,      # 기본값 'td, span, div' 는 문서에서 처음 나온 아무 요소를 잡는다 -> 확인된 신문사는 date_sel 로 좁힌다
         article_body_sel="#fontSzArea, td.view_title_text, #vContent, div.view_content",
         link_contains="index_view_page.php",
         homepage_url=base_url,
@@ -194,7 +194,8 @@ SITES: list[Site] = [
 
     # (12) 의령군
     _iksan_verified("의령신문", "의령군", "http://www.urnews.co.kr",
-                    note="의령군 대표 지역신문. 익산신문 패키지 솔루션 search_list 실측 100% 통과"),
+                    note="의령군 대표 지역신문. 익산신문 패키지 솔루션 search_list 실측 100% 통과",
+                    date_sel="span.view_title_info"),     # '입력 : 2026년 09월 28일'. 기사 페이지 실측(2026-10-30)
 
     # (13) 함안군
     Site(
@@ -261,8 +262,9 @@ SITES: list[Site] = [
         default_area="거창군",
         fetch="requests",
         encoding="euc-kr",
-        enabled=True,
+        enabled=False,
         note="거창군 대표 인터넷신문. all_search.php 연동 및 detail 본문 추출 실측 완료",
+        disabled_reason="기사 날짜 선택자를 확인하지 못해 수집 제외 (2026-10-30 사용자 지시). 선택자를 확인한 뒤 다시 켠다.",
     ),
 
     # (17) 밀양시

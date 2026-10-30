@@ -3,9 +3,19 @@
 common/pnu_resolver.py - 기사 내 주소 완성, 19자리 PNU 발급(Kakao/VWorld), SQLite 저장 파이프라인
 
 기능:
-1. 불완전 주소('지정면 신평리 400' 등)를 지역힌트/신문사/본문 힌트를 조합하여 온전한 한국식 표준 주소로 복원
-2. Kakao Local API 및 VWorld Geocoder API를 호출하여 19자리 토지 고유번호(PNU) 및 좌표 획득
-3. 중복 API 호출 방지를 위한 SQLite 기반 캐싱 및 영구 저장소(articles, article_addresses) 관리
+1. 불완전 주소('지정면 신평리 400' 등)를 주소 자체 > 신문사/지역힌트 > 읍·면 사전 > 기사 본문 순으로 단서를 써서
+   온전한 한국식 표준 주소로 복원한다. (시군구가 불확실하면 후보를 여러 개 만들어 차례로 조회한다)
+2. Kakao Local API 및 VWorld Geocoder API를 호출하여 19자리 토지 고유번호(PNU) 및 좌표를 얻는다.
+   응답 필지의 지번(본번·부번·산 여부)과 시군구가 요청과 같은지 확인하므로, 비슷한 다른 필지가 잘못 채택되지 않는다.
+3. 중복 API 호출 방지를 위한 SQLite 캐시와 영구 저장소(articles, article_addresses)를 관리한다.
+   - 성공은 계속 캐시, 실패(NOT_FOUND)는 주소 완성 로직 버전(NEWS_RESOLVER_VERSION)이 같고 30일 이내일 때만 재사용한다.
+   - 일시 오류(ERROR)는 캐시하지 않는다.
+
+주소에 어떤 근거로 시군구를 붙였는지는 basis 컬럼에 남긴다.
+  explicit(주소에 적혀 있음) / hint(신문사·지역힌트) / eupmyeon(읍·면 사전) / context(기사 본문 추정)
+  / province(시·도 + 읍·면 이름만으로 조회: 시군구를 응답에서 확인)
+  → eupmyeon·context·province 는 시군구를 추정한 것이므로, 정확도가 중요한 용도에서는 거를 수 있다.
+시·도도 시군구도 알 수 없는 주소는 조회하지 않는다(동명 지역의 엉뚱한 필지가 채택되는 것을 막기 위함).
 """
 
 import hashlib
@@ -13,195 +23,43 @@ import os
 import re
 import sqlite3
 import time
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from collections import Counter
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Tuple
 import requests
+
+from common.admin_names import (  # noqa: F401  (다른 모듈이 예전처럼 pnu_resolver 에서 가져다 쓸 수 있게 다시 내보낸다)
+    AMBIGUOUS_SIGUNGU, EUP_MYEON_MAP, GENERAL_GU_PARENT, METRO_GU_MAP, NON_PLACE_DONGRI,
+    PROVINCE_STANDARDIZATION, SHORT_SIGUNGU_MAP, SHORT_TO_SIGUNGU, SIGUNGU_TO_PROVINCE,
+    PROVINCE_SHORT, VALID_SIGUNGU_NAMES, _AMBIGUOUS_GU, is_place_eupmyeon,
+)
 
 # API 엔드포인트 및 인증 키 (퍼블릭 리포이므로 키는 환경변수 / GitHub Secrets 로만 받는다)
 KAKAO_URL = "https://dapi.kakao.com/v2/local/search/address.json"
-KAKAO_KEY = os.environ.get("KAKAO_REST_API_KEY", "")
-KAKAO_HEADERS = {"Authorization": f"KakaoAK {KAKAO_KEY}"}
-
 VWORLD_URL = "http://api.vworld.kr/req/address"
-VWORLD_KEY = os.environ.get("VWORLD_API_KEY", "")
 
-if not KAKAO_KEY or not VWORLD_KEY:
+# 주소 완성 로직 버전: 로직을 고쳐 실패 캐시를 다시 시도해야 할 때 올린다.
+NEWS_RESOLVER_VERSION = 2
+NOT_FOUND_TTL_DAYS = 30        # NOT_FOUND 캐시를 믿는 기간
+MAX_CANDIDATES = 5             # 주소 1건당 조회해 볼 후보 주소의 최대 개수
+CONTEXT_CHARS = 600            # 시군구 단서를 찾을 기사 본문 길이
+
+
+def _kakao_key() -> str:
+    return os.environ.get("KAKAO_REST_API_KEY", "")
+
+
+def _vworld_key() -> str:
+    return os.environ.get("VWORLD_API_KEY", "")
+
+
+if not _kakao_key() or not _vworld_key():
     print("[경고] KAKAO_REST_API_KEY / VWORLD_API_KEY 환경변수가 없습니다. PNU 발급이 실패할 수 있습니다.")
 
-# 광역시·도 표준 명칭 매핑
-PROVINCE_STANDARDIZATION = {
-    "강원": "강원특별자치도",
-    "강원도": "강원특별자치도",
-    "경기": "경기도",
-    "경기도": "경기도",
-    "경남": "경상남도",
-    "경상남도": "경상남도",
-    "경북": "경상북도",
-    "경상북도": "경상북도",
-    "전남": "전라남도",
-    "전라남도": "전라남도",
-    "전북": "전북특별자치도",
-    "전라북도": "전북특별자치도",
-    "충남": "충청남도",
-    "충청남도": "충청남도",
-    "충북": "충청북도",
-    "충청북도": "충청북도",
-    "서울": "서울특별시",
-    "서울시": "서울특별시",
-    "서울특별시": "서울특별시",
-    "인천": "인천광역시",
-    "인천시": "인천광역시",
-    "인천광역시": "인천광역시",
-    "대전": "대전광역시",
-    "대전시": "대전광역시",
-    "대전광역시": "대전광역시",
-    "대구": "대구광역시",
-    "대구시": "대구광역시",
-    "대구광역시": "대구광역시",
-    "광주": "광주광역시",
-    "광주시": "광주광역시",
-    "광주광역시": "광주광역시",
-    "울산": "울산광역시",
-    "울산시": "울산광역시",
-    "울산광역시": "울산광역시",
-    "부산": "부산광역시",
-    "부산시": "부산광역시",
-    "부산광역시": "부산광역시",
-    "세종": "세종특별자치시",
-    "세종시": "세종특별자치시",
-    "세종특별자치시": "세종특별자치시",
-    "제주": "제주특별자치도",
-    "제주도": "제주특별자치도",
-    "제주특별자치도": "제주특별자치도",
-}
 
-# 전국 시·군·구에 대한 광역시·도 역매핑 (전국 자치구/일반구 포함)
-SIGUNGU_TO_PROVINCE = {
-    # 서울특별시
-    "종로구": "서울특별시", "중구": "서울특별시", "용산구": "서울특별시", "성동구": "서울특별시",
-    "광진구": "서울특별시", "동대문구": "서울특별시", "중랑구": "서울특별시", "성북구": "서울특별시",
-    "강북구": "서울특별시", "도봉구": "서울특별시", "노원구": "서울특별시", "은평구": "서울특별시",
-    "서대문구": "서울특별시", "마포구": "서울특별시", "양천구": "서울특별시", "강서구": "서울특별시",
-    "구로구": "서울특별시", "금천구": "서울특별시", "영등포구": "서울특별시", "동작구": "서울특별시",
-    "관악구": "서울특별시", "서초구": "서울특별시", "강남구": "서울특별시", "송파구": "서울특별시", "강동구": "서울특별시",
-    # 부산광역시
-    "영도구": "부산광역시", "부산진구": "부산광역시", "동래구": "부산광역시", "해운대구": "부산광역시",
-    "사하구": "부산광역시", "금정구": "부산광역시", "연제구": "부산광역시", "수영구": "부산광역시",
-    "사상구": "부산광역시", "기장군": "부산광역시",
-    # 대구광역시
-    "수성구": "대구광역시", "달서구": "대구광역시", "달성군": "대구광역시", "군위군": "대구광역시",
-    # 인천광역시
-    "미추홀구": "인천광역시", "연수구": "인천광역시", "남동구": "인천광역시", "부평구": "인천광역시",
-    "계양구": "인천광역시", "강화군": "인천광역시", "옹진군": "인천광역시",
-    # 광주광역시
-    "광산구": "광주광역시",
-    # 대전광역시
-    "유성구": "대전광역시", "대덕구": "대전광역시",
-    # 울산광역시
-    "울주군": "울산광역시",
-    # 세종특별자치시
-    "세종시": "세종특별자치시", "세종특별자치시": "세종특별자치시",
-    # 경기도
-    "수원시": "경기도", "성남시": "경기도", "고양시": "경기도", "용인시": "경기도",
-    "부천시": "경기도", "안산시": "경기도", "안양시": "경기도", "남양주시": "경기도",
-    "화성시": "경기도", "평택시": "경기도", "의정부시": "경기도", "시흥시": "경기도",
-    "파주시": "경기도", "광명시": "경기도", "김포시": "경기도", "군포시": "경기도",
-    "이천시": "경기도", "양주시": "경기도", "오산시": "경기도", "구리시": "경기도",
-    "안성시": "경기도", "포천시": "경기도", "의왕시": "경기도", "하남시": "경기도",
-    "여주시": "경기도", "양평군": "경기도", "동두천시": "경기도", "과천시": "경기도",
-    "가평군": "경기도", "연천군": "경기도",
-    # 강원특별자치도
-    "춘천시": "강원특별자치도", "원주시": "강원특별자치도", "강릉시": "강원특별자치도",
-    "동해시": "강원특별자치도", "태백시": "강원특별자치도", "속초시": "강원특별자치도",
-    "삼척시": "강원특별자치도", "홍천군": "강원특별자치도", "횡성군": "강원특별자치도",
-    "영월군": "강원특별자치도", "평창군": "강원특별자치도", "정선군": "강원특별자치도",
-    "철원군": "강원특별자치도", "화천군": "강원특별자치도", "양구군": "강원특별자치도",
-    "인제군": "강원특별자치도", "고성군": "강원특별자치도", "양양군": "강원특별자치도",
-    # 충청북도
-    "청주시": "충청북도", "충주시": "충청북도", "제천시": "충청북도", "보은군": "충청북도",
-    "옥천군": "충청북도", "영동군": "충청북도", "증평군": "충청북도", "진천군": "충청북도",
-    "괴산군": "충청북도", "음성군": "충청북도", "단양군": "충청북도",
-    "상당구": "충청북도", "서원구": "충청북도", "흥덕구": "충청북도", "청원구": "충청북도",
-    # 충청남도
-    "천안시": "충청남도", "공주시": "충청남도", "보령시": "충청남도", "아산시": "충청남도",
-    "서산시": "충청남도", "논산시": "충청남도", "계룡시": "충청남도", "당진시": "충청남도",
-    "금산군": "충청남도", "부여군": "충청남도", "서천군": "충청남도", "청양군": "충청남도",
-    "홍성군": "충청남도", "예산군": "충청남도", "태안군": "충청남도",
-    "동남구": "충청남도", "서북구": "충청남도",
-    # 전북특별자치도
-    "전주시": "전북특별자치도", "익산시": "전북특별자치도", "군산시": "전북특별자치도",
-    "정읍시": "전북특별자치도", "남원시": "전북특별자치도", "김제시": "전북특별자치도",
-    "완주군": "전북특별자치도", "진안군": "전북특별자치도", "무주군": "전북특별자치도",
-    "장수군": "전북특별자치도", "임실군": "전북특별자치도", "순창군": "전북특별자치도",
-    "고창군": "전북특별자치도", "부안군": "전북특별자치도",
-    # 전라남도
-    "목포시": "전라남도", "여수시": "전라남도", "순천시": "전라남도", "나주시": "전라남도",
-    "광양시": "전라남도", "담양군": "전라남도", "곡성군": "전라남도", "구례군": "전라남도",
-    "고흥군": "전라남도", "보성군": "전라남도", "화순군": "전라남도", "장흥군": "전라남도",
-    "강진군": "전라남도", "해남군": "전라남도", "영암군": "전라남도", "무안군": "전라남도",
-    "함평군": "전라남도", "영광군": "전라남도", "장성군": "전라남도", "완도군": "전라남도",
-    "진도군": "전라남도", "신안군": "전라남도",
-    # 경상북도
-    "포항시": "경상북도", "경주시": "경상북도", "김천시": "경상북도", "안동시": "경상북도",
-    "구미시": "경상북도", "영주시": "경상북도", "영천시": "경상북도", "상주시": "경상북도",
-    "문경시": "경상북도", "경산시": "경상북도", "의성군": "경상북도", "청송군": "경상북도",
-    "영양군": "경상북도", "영덕군": "경상북도", "청도군": "경상북도", "고령군": "경상북도",
-    "성주군": "경상북도", "칠곡군": "경상북도", "예천군": "경상북도", "봉화군": "경상북도",
-    "울진군": "경상북도", "울릉군": "경상북도",
-    # 경상남도
-    "창원시": "경상남도", "진주시": "경상남도", "통영시": "경상남도", "사천시": "경상남도",
-    "김해시": "경상남도", "밀양시": "경상남도", "거제시": "경상남도", "양산시": "경상남도",
-    "의령군": "경상남도", "함안군": "경상남도", "창녕군": "경상남도", "고성군": "경상남도",
-    "남해군": "경상남도", "하동군": "경상남도", "산청군": "경상남도", "함양군": "경상남도",
-    "거창군": "경상남도", "합천군": "경상남도",
-    # 제주특별자치도
-    "제주시": "제주특별자치도", "서귀포시": "제주특별자치도",
-}
-
-# 시/군/구 접미사가 생략된 2~3글자 단어 매핑 (예: "영동" -> ("충청북도", "영동군"))
-SHORT_SIGUNGU_MAP = {
-    "영동": ("충청북도", "영동군"), "서산": ("충청남도", "서산시"), "제천": ("충청북도", "제천시"),
-    "음성": ("충청북도", "음성군"), "괴산": ("충청북도", "괴산군"), "보은": ("충청북도", "보은군"),
-    "진천": ("충청북도", "진천군"), "당진": ("충청남도", "당진시"), "공주": ("충청남도", "공주시"),
-    "보령": ("충청남도", "보령시"), "논산": ("충청남도", "논산시"), "계룡": ("충청남도", "계룡시"),
-    "홍성": ("충청남도", "홍성군"), "예산": ("충청남도", "예산군"), "태안": ("충청남도", "태안군"),
-    "부여": ("충청남도", "부여군"), "서천": ("충청남도", "서천군"), "청양": ("충청남도", "청양군"),
-    "금산": ("충청남도", "금산군"), "천안": ("충청남도", "천안시"), "아산": ("충청남도", "아산시"),
-    "청주": ("충청북도", "청주시"), "충주": ("충청북도", "충주시"), "단양": ("충청북도", "단양군"),
-    "옥천": ("충청북도", "옥천군"), "증평": ("충청북도", "증평군"),
-    "김해": ("경상남도", "김해시"), "구미": ("경상북도", "구미시"), "포항": ("경상북도", "포항시"),
-    "창원": ("경상남도", "창원시"), "진주": ("경상남도", "진주시"), "원주": ("강원특별자치도", "원주시"),
-    "강릉": ("강원특별자치도", "강릉시"), "춘천": ("강원특별자치도", "춘천시"), "화순": ("전라남도", "화순군"),
-    "목포": ("전라남도", "목포시"), "부천": ("경기도", "부천시"), "수원": ("경기도", "수원시"),
-}
-
-# 읍/면 이름 -> (시·도, 시·군·구) 직접 매핑 (시·군·구 생략 주소 자동 복원)
-EUP_MYEON_MAP = {
-    "영동읍": ("충청북도", "영동군"), "황간면": ("충청북도", "영동군"), "용산면": ("충청북도", "영동군"),
-    "추풍령면": ("충청북도", "영동군"), "매곡면": ("충청북도", "영동군"), "상촌면": ("충청북도", "영동군"),
-    "양강면": ("충청북도", "영동군"), "용화면": ("충청북도", "영동군"), "학산면": ("충청북도", "영동군"),
-    "양산면": ("충청북도", "영동군"), "심천면": ("충청북도", "영동군"),
-    "대소읍": ("충청북도", "음성군"), "금왕읍": ("충청북도", "음성군"), "원남면": ("충청북도", "음성군"),
-    "음성읍": ("충청북도", "음성군"), "소이면": ("충청북도", "음성군"), "맹동면": ("충청북도", "음성군"),
-    "삼성면": ("충청북도", "음성군"), "생극면": ("충청북도", "음성군"), "감곡면": ("충청북도", "음성군"),
-    "운산면": ("충청남도", "서산시"), "성연면": ("충청남도", "서산시"), "대산읍": ("충청남도", "서산시"),
-    "인지면": ("충청남도", "서산시"), "부석면": ("충청남도", "서산시"), "팔봉면": ("충청남도", "서산시"),
-    "지곡면": ("충청남도", "서산시"), "음암면": ("충청남도", "서산시"), "해미면": ("충청남도", "서산시"), "고북면": ("충청남도", "서산시"),
-    "두마면": ("충청남도", "계룡시"), "엄사면": ("충청남도", "계룡시"), "신도안면": ("충청남도", "계룡시"),
-    "탕정면": ("충청남도", "아산시"), "배방읍": ("충청남도", "아산시"), "음봉면": ("충청남도", "아산시"),
-    "신창면": ("충청남도", "아산시"), "둔포면": ("충청남도", "아산시"), "염치읍": ("충청남도", "아산시"),
-    "영인면": ("충청남도", "아산시"), "선장면": ("충청남도", "아산시"), "도고면": ("충청남도", "아산시"), "송악면": ("충청남도", "아산시"),
-    "오가면": ("충청남도", "예산군"), "삽교읍": ("충청남도", "예산군"), "예산읍": ("충청남도", "예산군"), "덕산면": ("충청남도", "예산군"),
-    "태안읍": ("충청남도", "태안군"), "안면읍": ("충청남도", "태안군"), "근흥면": ("충청남도", "태안군"), "소원면": ("충청남도", "태안군"),
-    "오송읍": ("충청북도", "청주시 흥덕구"), "오창읍": ("충청북도", "청주시 청원구"), "내수읍": ("충청북도", "청주시 청원구"),
-    "옥산면": ("충청북도", "청주시 흥덕구"), "낭성면": ("충청북도", "청주시 상당구"),
-    "사리면": ("충청북도", "괴산군"), "괴산읍": ("충청북도", "괴산군"), "칠성면": ("충청북도", "괴산군"),
-    "내북면": ("충청북도", "보은군"), "보은읍": ("충청북도", "보은군"),
-    "덕산읍": ("충청북도", "진천군"), "진천읍": ("충청북도", "진천군"), "광혜원면": ("충청북도", "진천군"),
-    "이양면": ("전라남도", "화순군"), "화순읍": ("전라남도", "화순군"),
-    "대동면": ("경상남도", "김해시"), "진영읍": ("경상남도", "김해시"),
-    "선산읍": ("경상북도", "구미시"), "고아읍": ("경상북도", "구미시"),
-}
+def build_context(title: str = "", body: str = "") -> str:
+    """시군구 단서를 찾는 기사 문맥 (제목 + 본문 앞부분). 정제 단계와 PNU 단계가 같은 문맥을 쓰도록 한 곳에서 만든다."""
+    return f"{title or ''} {(body or '')[:CONTEXT_CHARS]}".strip()
 
 
 @dataclass
@@ -209,12 +67,13 @@ class PNUResult:
     raw_address: str
     completed_address: str
     pnu: Optional[str]
-    source: str          # 'kakao' | 'vworld' | 'cache' | 'none'
+    source: str          # 'kakao' | 'vworld' | 'cache(...)' | 'none'
     status: str          # 'SUCCESS' | 'NOT_FOUND' | 'ERROR'
     x: Optional[float] = None
     y: Optional[float] = None
     standard_name: str = ""
     error_message: str = ""
+    basis: str = ""      # 시군구를 정한 근거: explicit | hint | eupmyeon | context | province
 
 
 def extract_numbers_and_mountain(addr: str) -> Tuple[str, str, str]:
@@ -237,187 +96,352 @@ def extract_numbers_and_mountain(addr: str) -> Tuple[str, str, str]:
     return "0000", "0000", mountain
 
 
-# 특별시/광역시별 구/군 목록 (동명 구 '중구', '동구', '서구', '남구', '북구' 정밀 구분용)
-METRO_GU_MAP = {
-    "서울특별시": ["종로구", "중구", "용산구", "성동구", "광진구", "동대문구", "중랑구", "성북구", "강북구", "도봉구", "노원구", "은평구", "서대문구", "마포구", "양천구", "강서구", "구로구", "금천구", "영등포구", "동작구", "관악구", "서초구", "강남구", "송파구", "강동구"],
-    "부산광역시": ["중구", "서구", "동구", "영도구", "부산진구", "동래구", "남구", "북구", "해운대구", "사하구", "금정구", "강서구", "연제구", "수영구", "사상구", "기장군"],
-    "대구광역시": ["중구", "동구", "서구", "남구", "북구", "수성구", "달서구", "달성군", "군위군"],
-    "인천광역시": ["중구", "동구", "미추홀구", "연수구", "남동구", "부평구", "계양구", "서구", "강화군", "옹진군"],
-    "광주광역시": ["동구", "서구", "남구", "북구", "광산구"],
-    "대전광역시": ["동구", "중구", "서구", "유성구", "대덕구"],
-    "울산광역시": ["중구", "남구", "동구", "북구", "울주군"],
-    "세종특별자치시": ["세종시"],
-}
+# ============================ 주소 해석 ============================
+@dataclass
+class ParsedAddress:
+    prov: str = ""                                   # 주소에 적힌 시·도 (표준 명칭)
+    sg: List[str] = field(default_factory=list)      # 주소에 적힌 시·군·구 (예: ['포항시', '북구'])
+    eup: str = ""                                    # 읍/면
+    dongri: str = ""                                 # 동/리 (또는 '3가')
+    mountain: bool = False
+    main: int = 0
+    sub: int = 0
+    junk: List[str] = field(default_factory=list)    # 주소 앞에 섞인 지명 아닌 낱말 ('사업지구' 등)
+
+    @property
+    def lot_text(self) -> str:
+        num = f"{self.main}-{self.sub}" if self.sub else f"{self.main}"
+        return f"산 {num}" if self.mountain else num
+
+
+def _normalize_address(raw: str) -> str:
+    a = re.sub(r"\s+", " ", raw or "").strip()
+    a = re.sub(r"\s*번지\s*$", "", a)
+    a = re.sub(r"(?<=[동리가])(?=\d)", " ", a)        # '원계리388' -> '원계리 388'
+    a = re.sub(r"(\d)\s*-\s*(\d)", r"\1-\2", a)
+    return a
+
+
+def parse_address(raw: str) -> Optional[ParsedAddress]:
+    """기사에서 뽑은 주소 문자열을 구성 요소로 나눈다. 동/리 + 지번이 없으면 None (주소가 아닌 것)."""
+    a = _normalize_address(raw)
+    m = re.search(r"(산\s*)?(\d{1,4})(?:-(\d{1,4}))?$", a)
+    if not m:
+        return None
+    parsed = ParsedAddress(mountain=bool(m.group(1)), main=int(m.group(2)), sub=int(m.group(3) or 0))
+    toks = a[:m.start()].split()
+    if not toks:
+        return None
+    last = toks[-1]
+    if not (re.fullmatch(r"[가-힣]+(?:동|리)", last) or re.fullmatch(r"[가-힣]+\d가", last)):
+        return None
+    if last in NON_PLACE_DONGRI:
+        return None
+    parsed.dongri = last
+    toks = toks[:-1]
+    if toks and is_place_eupmyeon(toks[-1]):
+        parsed.eup = toks.pop()
+    for i, t in enumerate(toks):
+        if t == "광주시" and i + 1 < len(toks) and toks[i + 1] in METRO_GU_MAP["광주광역시"]:
+            t = "광주광역시"          # '광주시 북구 일곡동' 의 광주시는 경기도 광주시가 아니라 광주광역시
+        if t in PROVINCE_STANDARDIZATION and not parsed.sg:
+            parsed.prov = PROVINCE_STANDARDIZATION[t]
+        elif t in VALID_SIGUNGU_NAMES and len(parsed.sg) < 2:
+            parsed.sg.append(t)
+        else:
+            parsed.junk.append(t)
+    return parsed
+
+
+def parse_hint(*texts: str) -> Tuple[str, List[str]]:
+    """지역힌트(예: '충청 충남 천안', '함양군', '경상남도')에서 (시·도, [시·군·구...]) 를 뽑는다."""
+    prov = ""
+    sg: List[str] = []
+    for w in re.split(r"[\s,/·|;]+", " ".join(t for t in texts if t)):
+        if not w:
+            continue
+        if w in PROVINCE_STANDARDIZATION:
+            prov = prov or PROVINCE_STANDARDIZATION[w]
+        elif w in VALID_SIGUNGU_NAMES:
+            sg.append(w)
+        elif w in SHORT_TO_SIGUNGU:
+            sg.append(SHORT_TO_SIGUNGU[w])
+    return prov, sg
+
+
+def _province_of(sgg: str, prefer: str = "") -> str:
+    """시/군의 시·도. 이름이 겹치는 시/군(고성군 등)은 prefer(다른 단서의 시·도)와 맞는 쪽을 고른다."""
+    names = AMBIGUOUS_SIGUNGU.get(sgg) or ([SIGUNGU_TO_PROVINCE[sgg]] if sgg in SIGUNGU_TO_PROVINCE else [])
+    if not names:
+        return ""
+    return prefer if prefer in names else names[0]
+
+
+def _metro_of_gu(gu: str) -> str:
+    owners = [p for p, gus in METRO_GU_MAP.items() if gu in gus]
+    return owners[0] if len(owners) == 1 else ""
+
+
+def _normalize_chain(chain: List[str], prov_pref: str, hint_sg: List[str]) -> Tuple[List[str], str]:
+    """시군구 목록을 '시 [구]' 형태로 바로잡고 시·도를 정한다."""
+    first = chain[0]
+    if first[-1] in "시군":
+        return chain, _province_of(first, prov_pref)
+    # 구 이름만 있는 경우
+    if len(chain) == 1:
+        gu = first
+        if gu in GENERAL_GU_PARENT and gu not in _AMBIGUOUS_GU:          # 의창구 -> 창원시 의창구
+            parent = GENERAL_GU_PARENT[gu]
+            return [parent, gu], _province_of(parent, prov_pref)
+        if gu in _AMBIGUOUS_GU and ("포항시" in hint_sg or prov_pref == "경상북도"):   # 포항 남구/북구
+            return ["포항시", gu], "경상북도"
+        if prov_pref in METRO_GU_MAP and gu in METRO_GU_MAP[prov_pref]:
+            return chain, prov_pref
+        return chain, _metro_of_gu(gu) or prov_pref
+    return chain, prov_pref
+
+
+def _hint_chain(hint_sg: List[str]) -> List[str]:
+    """지역힌트의 시군구 목록에서 '시/군 [구]' 하나를 고른다."""
+    for i, name in enumerate(hint_sg):
+        if name[-1] in "시군":
+            nxt = hint_sg[i + 1] if i + 1 < len(hint_sg) else ""
+            return [name, nxt] if nxt and nxt[-1] == "구" else [name]
+    return [hint_sg[0]] if hint_sg else []
+
+
+_SI_GUN_NAMES = sorted((n for n in VALID_SIGUNGU_NAMES if n[-1] in "시군"), key=len, reverse=True)
+
+
+def context_sigungu(context: str, prov: str = "") -> List[Tuple[str, List[str]]]:
+    """기사 문맥에 나온 시·군·구 이름을 (많이 나온 순, 먼저 나온 순) 으로 돌려준다. [(시·도, [시군구])]
+    '집중호우시'처럼 지명이 아닌 낱말이 시로 끝나는 경우는 이름 사전으로 걸러진다."""
+    if not context:
+        return []
+    ranked: List[Tuple[int, int, str]] = []
+    for name in _SI_GUN_NAMES:
+        hits = [m.start() for m in re.finditer(r"(?<![가-힣])" + re.escape(name), context)]
+        if not hits:
+            continue
+        names = AMBIGUOUS_SIGUNGU.get(name) or [SIGUNGU_TO_PROVINCE.get(name, "")]
+        if prov and prov not in names:
+            continue
+        if name == "광주시" and prov == "광주광역시":      # 광주광역시 기사의 '광주시'는 광주광역시 자신 (경기 광주시 아님)
+            continue
+        ranked.append((-len(hits), hits[0], name))
+    ranked.sort()
+    out: List[Tuple[str, List[str]]] = [(_province_of(n, prov), [n]) for _, _, n in ranked]
+    if not out and prov in METRO_GU_MAP:             # 광역시: 문맥에 나온 구
+        gus = []
+        for gu in METRO_GU_MAP[prov]:
+            hits = [m.start() for m in re.finditer(r"(?<![가-힣])" + re.escape(gu), context)]
+            if hits:
+                gus.append((-len(hits), hits[0], gu))
+        out = [(prov, [gu]) for _, _, gu in sorted(gus)]
+    return out
+
+
+def _assemble(prov: str, chain: List[str], eup: str, dongri: str, lot: str) -> str:
+    return re.sub(r"\s+", " ", " ".join(x for x in [prov, *chain, eup, dongri, lot] if x)).strip()
+
+
+def complete_korean_address_candidates(raw_addr: str, area_hint: str = "", paper: str = "",
+                                       default_area: str = "", context_text: str = "",
+                                       max_candidates: int = MAX_CANDIDATES) -> List[Tuple[str, str]]:
+    """불완전 주소를 조회용 표준 주소 후보로 만든다. [(완성주소, 근거)] 가장 믿을 만한 것이 앞.
+    주소가 아닌 것(동/리 + 지번이 없음)이면 빈 목록.
+
+    시군구를 정하는 우선순위
+      1. 주소 자체에 적힌 시·군·구 (다른 단서와 충돌해도 이것을 믿는다: '포항시 북구'는 대구 힌트가 있어도 경북)
+      2. 신문사 기본지역·지역힌트의 시·군·구
+      3. 읍·면 이름 사전 (주소/힌트에 시·도가 있으면 그것과 맞을 때만)
+      4. 기사 문맥에 가장 많이 나온 시·군·구 (여러 개면 차례로 후보)
+    """
+    p = parse_address(raw_addr)
+    if p is None:
+        return []
+    hprov, hsg = parse_hint(default_area, area_hint)
+    prov_pref = p.prov or hprov
+    plans: List[Tuple[str, List[str], str]] = []      # (시·도, 시군구, 근거)
+
+    if p.sg:                                                          # 1. 주소에 명시
+        chain, prov = _normalize_chain(list(p.sg), prov_pref, hsg)
+        plans.append((prov or prov_pref, chain, "explicit"))
+    else:
+        hchain = _hint_chain(hsg)                                     # 2. 힌트
+        if hchain:
+            chain, prov = _normalize_chain(hchain, prov_pref, hsg)
+            if not (p.prov and prov and p.prov != prov):             # 주소의 시·도와 힌트 시군구의 시·도가 다르면 힌트를 버린다
+                plans.append((prov or prov_pref, chain, "hint"))
+
+    known_prov = prov_pref or (plans[0][0] if plans else "")
+    if not p.sg:                                                      # 3, 4. 추정 후보 (주소에 시군구가 없을 때만)
+        have = {tuple(pl[1]) for pl in plans}
+        em = EUP_MYEON_MAP.get(p.eup)
+        if em and (not known_prov or em[0] == known_prov) and tuple(em[1].split()) not in have:
+            plans.append((em[0], em[1].split(), "eupmyeon"))
+            have.add(tuple(em[1].split()))
+        for prov, chain in context_sigungu(context_text, known_prov):
+            if tuple(chain) not in have:
+                plans.append((prov or known_prov, chain, "context"))
+                have.add(tuple(chain))
+
+    out: List[Tuple[str, str]] = []
+    seen = set()
+
+    def add(addr: str, basis: str):
+        if addr not in seen:
+            seen.add(addr)
+            out.append((addr, basis))
+
+    for prov, chain, basis in plans:
+        add(_assemble(prov, chain, p.eup, p.dongri, p.lot_text), basis)
+    # 마지막 대안: 시군구를 빼고 '시·도 + 읍/면 + 동/리 + 지번' 으로 조회. 힌트의 시군구가 틀렸을 때(예: 진주신문에 실린
+    # 의령군 궁류면) 읍/면 이름이 시군구를 알려 준다. 읍/면을 빼고 시군구만으로 조회하는 대안은 두지 않는다 —
+    # 다른 읍/면의 같은 이름 리가 우연히 같은 지번이면 엉뚱한 필지를 채택하게 된다.
+    if known_prov and p.eup and not p.sg:
+        add(_assemble(known_prov, [], p.eup, p.dongri, p.lot_text), "province")
+    if not out and known_prov:                                        # 시·도만 아는 경우 (예: 경남일보)
+        add(_assemble(known_prov, [], "", p.dongri, p.lot_text), "province")
+    return out[:max_candidates]               # 시·도도 시군구도 모르면 빈 목록 (조회하지 않는다)
 
 
 def complete_korean_address(raw_addr: str, area_hint: str = "", paper: str = "",
                             default_area: str = "", context_text: str = "") -> str:
-    """
-    기사 내 축약/불완전 주소('영동읍 계산리 583-11번지' 등)를 온전한 대한민국 표준 주소로 완성.
-    (예: '충청북도 영동군 영동읍 계산리 583-11번지')
-    """
-    addr = (raw_addr or "").strip()
-    if not addr:
-        return ""
-
-    full_ctx = f"{area_hint} {default_area} {context_text}"
-    prov = None
-    sigungu = None
-
-    # 0. 광역시·도 단서 우선 탐색
-    for p_short, p_full in PROVINCE_STANDARDIZATION.items():
-        if p_short in full_ctx or addr.startswith(p_short):
-            prov = p_full
-            break
-
-    # 1. 읍/면 사전 매핑: 주소 자체에 읍/면/동이 있으면 주소 내부를 최우선 적용
-    has_eup_myeon_dong = any(x in addr for x in ["읍", "면", "동", "가"])
-    for em, (p, s) in EUP_MYEON_MAP.items():
-        if em in addr:
-            prov, sigungu = p, s
-            break
-        elif not has_eup_myeon_dong and em in context_text[:300]:
-            # 주소에 읍/면/동이 전혀 없고 리 지번만 있는 경우 본문에서 읍/면 보충
-            prov, sigungu = p, s
-            addr = f"{em} {addr}"
-            break
-
-    # 2. 광역시/특별시 산하 구 탐색 (대전 중구, 부산 강서구 등)
-    if not sigungu and prov and prov in METRO_GU_MAP:
-        for gu in METRO_GU_MAP[prov]:
-            if gu in addr or gu in full_ctx:
-                sigungu = gu
-                break
-
-    # 3. 시·군·구 매핑 (주소, 지역힌트, 본문에서 탐색)
-    if not sigungu:
-        # A. 정식 시·군·구 매핑
-        for s_name, p_name in SIGUNGU_TO_PROVINCE.items():
-            if s_name in addr or s_name in full_ctx:
-                sigungu = s_name
-                prov = p_name
-                break
-
-    if not sigungu:
-        # B. 짧은 지명 매핑 (예: "영동" -> 영동군, "서산" -> 서산시)
-        for short_name, (p_name, s_name) in SHORT_SIGUNGU_MAP.items():
-            if re.search(rf"(?:^|\s|[^\w]){re.escape(short_name)}(?:$|\s|[^\w])", full_ctx) or short_name in addr:
-                sigungu = s_name
-                prov = p_name
-                break
-
-    # 4. 주소 조립 및 중복 제거
-    res = addr
-
-    # 시군구 결합
-    if sigungu:
-        # addr 시작 부분에 이미 sigungu가 있거나 구 이름이 있는지 체크
-        sigungu_last = sigungu.split()[-1]
-        if not (res.startswith(sigungu) or res.startswith(sigungu_last)):
-            res = f"{sigungu} {res}"
-        elif res.startswith(sigungu_last) and not res.startswith(sigungu):
-            # 예: "상당구 산성동" -> "청주시 상당구 산성동"
-            res = f"{sigungu.replace(sigungu_last, '').strip()} {res}".strip()
-
-    # 광역시·도 결합
-    if prov:
-        # 이미 prov로 시작하는지 체크
-        prov_prefix = prov[:2]  # 예: '충북', '충남', '대전' 등
-        starts_with_p = False
-        for p in [prov, prov_prefix]:
-            if res.startswith(p):
-                starts_with_p = True
-                # 축약형이면 정식 명칭으로 변경
-                if not res.startswith(prov):
-                    res = re.sub(rf"^{re.escape(p)}\s*", f"{prov} ", res, 1)
-                break
-        if not starts_with_p:
-            res = f"{prov} {res}"
-
-    return re.sub(r"\s+", " ", res).strip()
+    """기사 내 축약/불완전 주소('영동읍 계산리 583-11번지' 등)를 표준 주소로 완성 (가장 믿을 만한 후보 1개).
+    주소가 아니면 빈 문자열."""
+    cands = complete_korean_address_candidates(raw_addr, area_hint, paper, default_area, context_text)
+    return cands[0][0] if cands else ""
 
 
-def get_pnu_from_kakao(address: str, session: Optional[requests.Session] = None) -> PNUResult:
-    """Kakao Local API를 호출하여 19자리 PNU 추출"""
+# ============================ 지번 검증 / API 호출 ============================
+@dataclass
+class LotExpect:
+    """요청한 필지. API 응답이 이것과 같을 때만 채택한다."""
+    mountain: bool
+    main: int
+    sub: int
+    sigungu: Tuple[str, ...] = ()
+    province: str = ""        # 시군구 없이 조회한 경우에만 지정: 응답이 이 시·도 안인지 확인한다
+
+    def accepts(self, mountain: bool, main: int, sub: int, address_text: str) -> bool:
+        if (mountain, main, sub) != (self.mountain, self.main, self.sub):
+            return False
+        text = address_text or ""
+        if self.province and not (text.startswith(self.province) or text.startswith(PROVINCE_SHORT.get(self.province, self.province))):
+            return False
+        return all(tok in text for tok in self.sigungu)
+
+
+def expect_from_address(completed: str) -> Optional[LotExpect]:
+    p = parse_address(completed)
+    return LotExpect(p.mountain, p.main, p.sub, tuple(p.sg), "" if p.sg else p.prov) if p else None
+
+
+def _get_json(session: requests.Session, url: str, *, params: dict, headers: Optional[dict] = None,
+              timeout: int = 10, tries: int = 3) -> dict:
+    """GET + JSON. 429/5xx/네트워크 오류는 잠시 쉬었다 다시 시도하고, 인증 오류 등 4xx는 바로 실패시킨다."""
+    last = ""
+    for i in range(tries):
+        try:
+            r = session.get(url, params=params, headers=headers, timeout=timeout)
+            if r.status_code == 429 or r.status_code >= 500:
+                last = f"HTTP {r.status_code}"
+                time.sleep(1.5 * (i + 1))
+                continue
+            if r.status_code >= 400:
+                raise RuntimeError(f"HTTP {r.status_code}")
+            return r.json()
+        except RuntimeError:
+            raise
+        except (requests.RequestException, ValueError) as e:
+            last = f"{e.__class__.__name__}: {e}"
+            time.sleep(1.0 * (i + 1))
+    raise RuntimeError(last or "요청 실패")
+
+
+def get_pnu_from_kakao(address: str, session: Optional[requests.Session] = None,
+                       expect: Optional[LotExpect] = None) -> PNUResult:
+    """Kakao Local API로 19자리 PNU 추출. expect 를 주면 응답 필지의 지번·시군구가 같은 것만 채택한다."""
+    key = _kakao_key()
+    if not key:
+        return PNUResult(raw_address=address, completed_address=address, pnu=None, source="kakao",
+                         status="ERROR", error_message="KAKAO_REST_API_KEY 없음")
     s = session or requests.Session()
     try:
-        r = s.get(KAKAO_URL, headers=KAKAO_HEADERS, params={"query": address}, timeout=10)
-        if r.status_code == 429:
-            time.sleep(1.5)
-            r = s.get(KAKAO_URL, headers=KAKAO_HEADERS, params={"query": address}, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("documents"):
-            doc = data["documents"][0]
-            addr_info = doc.get("address")
-            if addr_info:
-                b_code = addr_info.get("b_code", "")
-                address_name = addr_info.get("address_name", "")
-                main_no, sub_no, mountain = extract_numbers_and_mountain(address_name or address)
-                pnu = f"{b_code[:10]}{mountain}{main_no}{sub_no}"
-                x = float(doc.get("x", 0)) if doc.get("x") else None
-                y = float(doc.get("y", 0)) if doc.get("y") else None
-                return PNUResult(
-                    raw_address=address,
-                    completed_address=address,
-                    pnu=pnu,
-                    source="kakao",
-                    status="SUCCESS",
-                    x=x,
-                    y=y,
-                    standard_name=address_name,
-                )
-        return PNUResult(raw_address=address, completed_address=address, pnu=None,
-                         source="kakao", status="NOT_FOUND", error_message="검색 결과 없음")
+        data = _get_json(s, KAKAO_URL, params={"query": address}, headers={"Authorization": f"KakaoAK {key}"})
     except Exception as e:
         return PNUResult(raw_address=address, completed_address=address, pnu=None,
                          source="kakao", status="ERROR", error_message=str(e))
+    first_name = ""
+    accepted: Dict[str, PNUResult] = {}
+    for doc in data.get("documents") or []:
+        info = doc.get("address")
+        if not info:
+            continue
+        b_code = info.get("b_code") or ""
+        name = info.get("address_name") or ""
+        first_name = first_name or name
+        if len(b_code) < 10:
+            continue
+        if info.get("mountain_yn") in ("Y", "N"):
+            mountain = info["mountain_yn"] == "Y"
+            main, sub = int(info.get("main_address_no") or 0), int(info.get("sub_address_no") or 0)
+        else:
+            main_s, sub_s, mt = extract_numbers_and_mountain(name or address)
+            mountain, main, sub = mt == "2", int(main_s), int(sub_s)
+        if expect and not expect.accepts(mountain, main, sub, name):
+            continue
+        pnu = f"{b_code[:10]}{'2' if mountain else '1'}{main:04d}{sub:04d}"
+        x = float(doc["x"]) if doc.get("x") else None
+        y = float(doc["y"]) if doc.get("y") else None
+        accepted.setdefault(pnu, PNUResult(raw_address=address, completed_address=address, pnu=pnu, source="kakao",
+                                           status="SUCCESS", x=x, y=y, standard_name=name))
+    if len(accepted) == 1:
+        return next(iter(accepted.values()))
+    if len(accepted) > 1:       # 시군구를 못 정해 조회했더니 여러 지역에 같은 주소가 있다 -> 어느 쪽인지 알 수 없다
+        names = " / ".join(r.standard_name for r in accepted.values())
+        return PNUResult(raw_address=address, completed_address=address, pnu=None, source="kakao",
+                         status="NOT_FOUND", error_message=f"같은 주소가 여러 곳에서 검색됨({names})")
+    msg = f"응답 필지가 요청과 다름({first_name})" if first_name else "검색 결과 없음"
+    return PNUResult(raw_address=address, completed_address=address, pnu=None,
+                     source="kakao", status="NOT_FOUND", error_message=msg)
 
 
-def get_pnu_from_vworld(address: str, session: Optional[requests.Session] = None) -> PNUResult:
-    """VWorld Geocoder API를 호출하여 19자리 PNU 추출 (폴백)"""
+def get_pnu_from_vworld(address: str, session: Optional[requests.Session] = None,
+                        expect: Optional[LotExpect] = None) -> PNUResult:
+    """VWorld Geocoder API로 19자리 PNU 추출 (Kakao 에 없을 때의 폴백)"""
+    key = _vworld_key()
+    if not key:
+        return PNUResult(raw_address=address, completed_address=address, pnu=None, source="vworld",
+                         status="NOT_FOUND", error_message="VWORLD_API_KEY 없음")
     s = session or requests.Session()
     params = {
-        "service": "address",
-        "request": "getcoord",
-        "version": "2.0",
-        "crs": "epsg:4326",
-        "address": address,
-        "refine": "true",
-        "simple": "false",
-        "format": "json",
-        "type": "PARCEL",
-        "key": VWORLD_KEY,
+        "service": "address", "request": "getcoord", "version": "2.0", "crs": "epsg:4326",
+        "address": address, "refine": "true", "simple": "false", "format": "json",
+        "type": "PARCEL", "key": key,
     }
     try:
-        r = s.get(VWORLD_URL, params=params, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        resp = data.get("response", {})
-        if resp.get("status") == "OK":
-            refined = resp.get("refined", {})
-            structure = refined.get("structure", {})
-            pnu = structure.get("level4LC", "")
-            std_text = refined.get("text", "")
-            pt = resp.get("result", {}).get("point", {})
-            x = float(pt.get("x", 0)) if pt.get("x") else None
-            y = float(pt.get("y", 0)) if pt.get("y") else None
-            if pnu and len(pnu) == 19:
-                return PNUResult(
-                    raw_address=address,
-                    completed_address=address,
-                    pnu=pnu,
-                    source="vworld",
-                    status="SUCCESS",
-                    x=x,
-                    y=y,
-                    standard_name=std_text,
-                )
-        return PNUResult(raw_address=address, completed_address=address, pnu=None,
-                         source="vworld", status="NOT_FOUND", error_message="VWorld 응답에 PNU 없음")
+        data = _get_json(s, VWORLD_URL, params=params, timeout=15)
     except Exception as e:
         return PNUResult(raw_address=address, completed_address=address, pnu=None,
                          source="vworld", status="ERROR", error_message=str(e))
+    resp = data.get("response", {})
+    if resp.get("status") == "OK":
+        refined = resp.get("refined", {})
+        pnu = (refined.get("structure") or {}).get("level4LC", "")
+        std_text = refined.get("text", "")
+        pt = (resp.get("result") or {}).get("point") or {}
+        if pnu and len(pnu) == 19 and pnu.isdigit():
+            mountain, main, sub = pnu[10] == "2", int(pnu[11:15]), int(pnu[15:19])
+            if not expect or expect.accepts(mountain, main, sub, std_text):
+                return PNUResult(raw_address=address, completed_address=address, pnu=pnu, source="vworld",
+                                 status="SUCCESS", x=float(pt["x"]) if pt.get("x") else None,
+                                 y=float(pt["y"]) if pt.get("y") else None, standard_name=std_text)
+            return PNUResult(raw_address=address, completed_address=address, pnu=None, source="vworld",
+                             status="NOT_FOUND", error_message=f"응답 필지가 요청과 다름({std_text})")
+    return PNUResult(raw_address=address, completed_address=address, pnu=None,
+                     source="vworld", status="NOT_FOUND", error_message="VWorld 응답에 PNU 없음")
 
 
 class PNUResolver:
@@ -425,9 +449,12 @@ class PNUResolver:
     주소 완성 + PNU 발급 + 캐싱 + SQLite 저장을 총괄하는 파이프라인 매니저
     """
 
-    def __init__(self, db_path: str = "output/news_articles_pnu.db"):
+    def __init__(self, db_path: str = "output/news_articles_pnu.db",
+                 kakao_fn: Optional[Callable] = None, vworld_fn: Optional[Callable] = None):
         self.db_path = db_path
         self.session = requests.Session()
+        self.kakao_fn = kakao_fn or get_pnu_from_kakao       # 테스트에서 가짜 조회 함수를 넣을 수 있다
+        self.vworld_fn = vworld_fn or get_pnu_from_vworld
         self._init_db()
 
     def _init_db(self):
@@ -449,7 +476,7 @@ class PNUResolver:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            # 컬럼 확인 및 content_hash 추가 (기존 DB 마이그레이션 호환)
+            # 컬럼 확인 및 추가 (기존 DB 마이그레이션 호환)
             cur.execute("PRAGMA table_info(articles)")
             cols = [row[1] for row in cur.fetchall()]
             if "content_hash" not in cols:
@@ -476,6 +503,9 @@ class PNUResolver:
                     FOREIGN KEY(article_link) REFERENCES articles(link)
                 )
             """)
+            cur.execute("PRAGMA table_info(article_addresses)")
+            if "basis" not in [row[1] for row in cur.fetchall()]:
+                cur.execute("ALTER TABLE article_addresses ADD COLUMN basis TEXT")
             # 3. 주소 -> PNU 고속 캐시 테이블
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS address_pnu_cache (
@@ -489,6 +519,9 @@ class PNUResolver:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            cur.execute("PRAGMA table_info(address_pnu_cache)")
+            if "ver" not in [row[1] for row in cur.fetchall()]:
+                cur.execute("ALTER TABLE address_pnu_cache ADD COLUMN ver INTEGER")
 
             # 고속 검색 및 중복 방지용 인덱스
             cur.execute("CREATE INDEX IF NOT EXISTS idx_articles_link ON articles(link)")
@@ -499,10 +532,14 @@ class PNUResolver:
             conn.commit()
 
     def get_cached_pnu(self, completed_address: str) -> Optional[PNUResult]:
+        """성공은 항상, 실패는 같은 로직 버전이고 30일 이내일 때만 돌려준다. 그 밖에는 None (다시 조회)."""
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.cursor()
-            cur.execute("SELECT pnu, source, standard_name, x, y, status FROM address_pnu_cache WHERE completed_address = ?",
-                        (completed_address,))
+            cur.execute(
+                "SELECT pnu, source, standard_name, x, y, status FROM address_pnu_cache "
+                "WHERE completed_address = ? AND (status = 'SUCCESS' OR "
+                "(status = 'NOT_FOUND' AND ver = ? AND updated_at >= datetime('now', ?)))",
+                (completed_address, NEWS_RESOLVER_VERSION, f"-{NOT_FOUND_TTL_DAYS} days"))
             row = cur.fetchone()
             if row:
                 pnu, source, std_name, x, y, status = row
@@ -519,49 +556,103 @@ class PNUResolver:
         return None
 
     def cache_pnu(self, res: PNUResult):
-        if not res.completed_address:
+        """성공/NOT_FOUND 만 캐시한다. 일시 오류(ERROR)를 캐시하면 영영 재시도되지 않는다."""
+        if not res.completed_address or res.status not in ("SUCCESS", "NOT_FOUND"):
             return
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.cursor()
             cur.execute("""
                 INSERT OR REPLACE INTO address_pnu_cache
-                (completed_address, pnu, source, standard_name, x, y, status, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (res.completed_address, res.pnu, res.source, res.standard_name, res.x, res.y, res.status))
+                (completed_address, pnu, source, standard_name, x, y, status, updated_at, ver)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            """, (res.completed_address, res.pnu, res.source, res.standard_name, res.x, res.y, res.status,
+                  NEWS_RESOLVER_VERSION))
             conn.commit()
+
+    def _lookup(self, completed: str) -> PNUResult:
+        """후보 주소 1개를 Kakao -> VWorld 순으로 조회 (응답 필지 검증 포함)."""
+        expect = expect_from_address(completed)
+        res = self.kakao_fn(completed, session=self.session, expect=expect)
+        if res.status == "SUCCESS" and res.pnu:
+            return res
+        v_res = self.vworld_fn(completed, session=self.session, expect=expect)
+        if v_res.status == "SUCCESS" and v_res.pnu:
+            return v_res
+        if "ERROR" in (res.status, v_res.status):      # 한쪽이라도 일시 오류면 '없음'으로 단정하지 않는다
+            return res if res.status == "ERROR" else v_res
+        return res
 
     def resolve(self, raw_addr: str, area_hint: str = "", paper: str = "",
                 default_area: str = "", context_text: str = "") -> PNUResult:
-        """불완전 주소를 한국식 표준 주소로 완성한 뒤 PNU를 발급(캐시 -> Kakao -> VWorld 폴백)"""
-        completed = complete_korean_address(raw_addr, area_hint=area_hint,
-                                            paper=paper, default_area=default_area,
-                                            context_text=context_text)
-        if not completed:
-            return PNUResult(raw_address=raw_addr, completed_address="", pnu=None,
-                             source="none", status="ERROR", error_message="주소 완성 불가")
+        """불완전 주소를 표준 주소 후보로 완성하고, 후보를 차례로 조회해 PNU를 발급 (캐시 -> Kakao -> VWorld)."""
+        candidates = complete_korean_address_candidates(
+            raw_addr, area_hint=area_hint, paper=paper, default_area=default_area, context_text=context_text)
+        if not candidates:
+            why = ("시·도와 시군구 단서가 없어 조회하지 않음" if parse_address(raw_addr) is not None
+                   else "주소 형식 아님(동/리 + 지번이 없음)")
+            return PNUResult(raw_address=raw_addr, completed_address=_normalize_address(raw_addr), pnu=None,
+                             source="none", status="NOT_FOUND", basis="none", error_message=why)
 
-        # 캐시 확인
-        cached = self.get_cached_pnu(completed)
-        if cached:
-            cached.raw_address = raw_addr
-            return cached
+        first_fail: Optional[PNUResult] = None
+        error_res: Optional[PNUResult] = None
+        for completed, basis in candidates:
+            res = self.get_cached_pnu(completed)
+            if res is None:
+                res = self._lookup(completed)
+                res.completed_address = completed
+                self.cache_pnu(res)
+            res.raw_address = raw_addr
+            res.completed_address = completed
+            res.basis = basis
+            if res.status == "SUCCESS" and res.pnu:
+                return res
+            first_fail = first_fail or res
+            if res.status == "ERROR":
+                error_res = error_res or res
+        # 일시 오류가 섞여 있으면 ERROR 로 돌려줘서 나중에 다시 시도되게 한다
+        return error_res or first_fail
 
-        # 1. Kakao API 호출
-        res = get_pnu_from_kakao(completed, session=self.session)
-        res.raw_address = raw_addr
-        res.completed_address = completed
-
-        # 2. Kakao 실패 시 VWorld 폴백
-        if res.status != "SUCCESS" or not res.pnu:
-            v_res = get_pnu_from_vworld(completed, session=self.session)
-            if v_res.status == "SUCCESS" and v_res.pnu:
-                v_res.raw_address = raw_addr
-                v_res.completed_address = completed
-                res = v_res
-
-        # 캐시 기록
-        self.cache_pnu(res)
-        return res
+    def repair_failed_addresses(self, statuses: Tuple[str, ...] = ("NOT_FOUND", "ERROR"), limit: int = 0,
+                                dry_run: bool = False, log: Callable[[str], None] = print) -> Dict[str, int]:
+        """DB 에 이미 쌓인 실패 주소를 현재 로직으로 다시 조회해 고친다 (기사 제목·지역힌트·신문사를 단서로 사용).
+        dry_run=True 면 DB 는 건드리지 않고 결과만 보여 준다."""
+        marks = ",".join("?" for _ in statuses)
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(f"""
+                SELECT aa.id, aa.article_link, aa.raw_address, aa.completed_address, aa.status,
+                       COALESCE(a.area_hint, ''), COALESCE(a.paper, ''), COALESCE(a.title, '')
+                FROM article_addresses aa LEFT JOIN articles a ON a.link = aa.article_link
+                WHERE aa.status IN ({marks}) ORDER BY aa.id""", statuses).fetchall()
+        if limit:
+            rows = rows[:limit]
+        stats = {"checked": 0, "fixed": 0, "still_failed": 0, "duplicates_removed": 0}
+        for row_id, link, raw, old_completed, old_status, hint, paper, title in rows:
+            res = self.resolve(raw, area_hint=hint, paper=paper, context_text=build_context(title))
+            stats["checked"] += 1
+            if res.status == "SUCCESS":
+                stats["fixed"] += 1
+                log(f"  ✔ [{paper}] '{raw}' : {old_completed} ({old_status}) → {res.completed_address} → {res.pnu} [{res.basis}]")
+            else:
+                stats["still_failed"] += 1
+                log(f"  ✘ [{paper}] '{raw}' : {res.completed_address} → {res.error_message}")
+            if dry_run:
+                continue
+            with sqlite3.connect(self.db_path) as conn:
+                if res.status == "SUCCESS":
+                    dup = conn.execute(
+                        "SELECT 1 FROM article_addresses WHERE article_link = ? AND pnu = ? AND id != ? LIMIT 1",
+                        (link, res.pnu, row_id)).fetchone()
+                    if dup:           # 같은 기사에 같은 필지가 이미 있으면 이 행은 중복이다
+                        conn.execute("DELETE FROM article_addresses WHERE id = ?", (row_id,))
+                        stats["duplicates_removed"] += 1
+                        continue
+                conn.execute(
+                    "UPDATE article_addresses SET completed_address=?, pnu=?, source=?, status=?, "
+                    "standard_name=?, x=?, y=?, basis=? WHERE id=?",
+                    (res.completed_address, res.pnu, res.source, res.status, res.standard_name,
+                     res.x, res.y, res.basis, row_id))
+                conn.commit()
+        return stats
 
     def save_article_and_addresses(self, article: dict, address_results: List[PNUResult]) -> Tuple[int, int]:
         """기사 메타데이터와 발급된 PNU 내역을 SQLite에 트랜잭션으로 안전하게 저장.
@@ -655,8 +746,8 @@ class PNUResolver:
                 # 신규 주소-기사 관계 저장
                 cur.execute("""
                     INSERT INTO article_addresses
-                    (article_link, raw_address, completed_address, pnu, source, status, standard_name, x, y)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (article_link, raw_address, completed_address, pnu, source, status, standard_name, x, y, basis)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     link,
                     r.raw_address,
@@ -667,6 +758,7 @@ class PNUResolver:
                     r.standard_name,
                     r.x,
                     r.y,
+                    r.basis,
                 ))
                 saved_count += 1
 

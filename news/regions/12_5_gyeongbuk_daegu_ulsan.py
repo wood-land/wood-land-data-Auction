@@ -148,7 +148,9 @@ SITES = [
         list_item_sel="ul.search_list li, div.sch_res_list li, li",
         list_title_sel="a[href*='board.php?bo_table=news&wr_id=']",
         list_date_sel="span.date, .time",
-        article_date_sel=".view_info, .date, span.date, div.art_top, p.today_text",
+        # 기사 날짜는 <ul class="art_info"> 의 "등록 2023.12.11 14:15". 예전 선택자 목록의 p.today_text 는 상단 메뉴의
+        # 오늘 날짜(2026.10.30 (금))라서 문서에서 먼저 나오는 그것이 기사 날짜로 읽혔다.
+        article_date_sel="ul.art_info",
         article_body_sel="#news_body_area, div.cnt_view, div.arv_001, #bo_v_con, div.view_content",
         link_contains="board.php?bo_table=news&wr_id=",
         homepage_url="http://www.guminews.co.kr",
@@ -355,8 +357,9 @@ SITES = [
         default_area="포항시",
         encoding="euc-kr",
         fetch="requests",
-        enabled=True,
+        enabled=False,
         note="포항시 대표 지역신문. 공식도메인(phsmnews.com) 그누보드 41건 실측 통과",
+        disabled_reason="기사 날짜 선택자를 확인하지 못해 수집 제외 (2026-10-30 사용자 지시). 선택자를 확인한 뒤 다시 켠다.",
     ),
 ]
 
