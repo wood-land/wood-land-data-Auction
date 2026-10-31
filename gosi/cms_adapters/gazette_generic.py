@@ -34,7 +34,7 @@ HEADERS = {
 }
 
 DATE_RE = re.compile(r"(20\d{2})\s*[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})|(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일")
-ISSUE_RE = re.compile(r"제\s?(\d{2,5})\s?호")
+ISSUE_RE = re.compile(r"(?:제|(?:시보|공보|군보|도보|구보)\s?)\s?(\d{2,5})\s?호")  # '시보 1150호'처럼 제 없이 간행물 이름 뒤에 붙는 호수도 읽는다(보령시)
 EXT_RE = re.compile(r"\.(pdf|hwpx|hwp|docx?|xlsx?|zip)(?![a-z])", re.I)
 FILEISH_HREF_RE = re.compile(r"download|filedown|/file/|fileid|atchfile|attach|getfile|filedownload|filedown", re.I)
 FILEISH_TEXT_RE = re.compile(r"pdf|hwp|다운로드|내려받기|첨부", re.I)
@@ -111,7 +111,10 @@ def _attachment(a, base, html=None, soup=None):
     name = _file_name(a, url)
     m2 = EXT_RE.search(name) or EXT_RE.search(url)
     sized = bool(SIZE_RE.search(a.get_text(" ", strip=True)))
-    return {"name": name, "url": url, "ext": m2.group(1).lower() if m2 else "", "sized": sized}
+    ext = m2.group(1).lower() if m2 else ""
+    if not ext and re.search(r"pdf", (a.get("title") or "") + a.get_text(" ", strip=True), re.I):
+        ext = "pdf"  # 주소·글자에 확장자가 없어도 'PDF 로 받아 보실 수 있습니다' 같은 안내가 있으면 PDF 로 본다(보령시 시보; 받은 뒤 형식은 내용으로 다시 판별한다)
+    return {"name": name, "url": url, "ext": ext, "sized": sized}
 
 
 def _containers(soup):
@@ -458,7 +461,7 @@ def fetch_list_page(session, base_url, board, page_index, page_unit=10):
         _PAGE_MAP[base_url] = _build_page_map(soup, resp.url)
     page_js = resp.text + "\n" + _external_js(session, resp.text, resp.url)  # JS 함수 정의가 외부 파일에 있는 사이트용
     rows = []
-    for c in [_widen(x) for x in _containers(soup)]:
+    for c in [x if x.name == "tr" else _widen(x) for x in _containers(soup)]:  # 표의 행(tr)은 이미 한 글이다 - 넓히면 표 전체(다른 호 첨부까지)가 한 글이 된다(통영시 공보)
         text = re.sub(r"\s+", " ", c.get_text(" ", strip=True))
         date = _parse_date(text)
         title_a, files, viewer_a = None, [], None
@@ -478,7 +481,7 @@ def fetch_list_page(session, base_url, board, page_index, page_unit=10):
         if title_a is not None:
             title = re.sub(r"\s+", " ", title_a.get_text(" ", strip=True))
         elif files:  # 제목 링크가 없고 첨부만 있으면 카드의 제목 요소, 없으면 첨부 이름(크기 표기 제외)을 제목으로 쓴다
-            head = c.select_one("[class*=title], strong, h3, h4, h5")
+            head = next((h for h in c.select("th, p") if ISSUE_RE.search(h.get_text(" ", strip=True))), None) or c.select_one("[class*=title], strong, h3, h4, h5")  # 호수가 든 th/p(통영·보령)를 먼저
             head_text = re.sub(r"\s+", " ", head.get_text(" ", strip=True)) if head else ""
             title = head_text or re.sub(r"\s*\[[\d.,]+\s*[KMGkmg]?B\]\s*$", "", files[0]["name"]).strip() or text[:80]
         else:
