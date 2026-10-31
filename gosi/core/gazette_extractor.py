@@ -59,6 +59,9 @@ def sniff_kind(data):
         return "zip"
     if data.startswith(b"\xd0\xcf\x11\xe0"):
         return "hwp"
+    head = data[:300].lstrip(b"\xef\xbb\xbf \r\n\t")
+    if head.startswith(b"<?xml") and b"<document>" in data[:400]:
+        return "ebook_xml"  # e-카탈로그의 쪽별 본문 텍스트(원주시 시보 search.xml)
     return "unknown"
 
 
@@ -181,6 +184,8 @@ def document_text(data, kind=None):
         return _hwpx_text(data)
     if kind == "docx":
         return _docx_text(data)
+    if kind == "ebook_xml":
+        return ebook_xml_text(data)
     if kind == "hwp":  # 구버전 이진 한글(.hwp) — 암호/배포용 문서는 읽지 못하고 None
         from core import hwp_text
 
@@ -189,6 +194,21 @@ def document_text(data, kind=None):
         except hwp_text.HwpUnsupported:
             return None
     return None
+
+
+def ebook_xml_text(data):
+    """e-카탈로그 search.xml(<page><no>1</no><search><![CDATA[본문]]></search></page>) -> 본문 텍스트.
+    본문이 줄바꿈 없이 한 줄로 이어져 있어, 목차 기호(○ 등) 앞에서 줄을 바꿔 공고 단위로 나눌 수 있게 한다.
+    표·도면만 있는 쪽은 글자가 비어 있다(이미지 OCR 없이는 읽을 수 없음)."""
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(data)
+    parts = []
+    for page in root.iter("page"):
+        t = (page.findtext("search") or "").strip()
+        if t:
+            parts.append(t)
+    text = "\n".join(parts)
+    return re.sub(r"\s*([○◉●■▣◆◇▶▷□▪])\s*", r"\n\1 ", text)
 
 
 def split_notices(text):

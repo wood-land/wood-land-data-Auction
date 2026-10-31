@@ -54,7 +54,7 @@ MAX_PAGES = 300  # 안전장치일 뿐: 보통은 N일보다 오래된 글을 �
 MAX_ATTACH_PER_POST = 30
 UNDATED_TAKE = 3
 MAX_BYTES = 300 * 1024 * 1024
-DOC_EXT = {"pdf", "hwpx", "hwp", "docx", "doc", "zip", ""}
+DOC_EXT = {"pdf", "hwpx", "hwp", "docx", "doc", "zip", "xml", ""}  # xml: 원주시 시보 e-카탈로그 본문(search.xml)
 
 
 class LegacyTLSAdapter(HTTPAdapter):
@@ -165,7 +165,7 @@ def read_attachment_text(session, att, referer, seen_hash, stat):
         kind = GX.sniff_kind(data)
     except (requests.RequestException, ValueError):
         data = None
-    if data is not None and kind in ("pdf", "hwpx", "docx", "hwp"):
+    if data is not None and kind in ("pdf", "hwpx", "docx", "hwp", "ebook_xml"):
         text = GX.document_text(data, kind)
         if kind == "hwp" and not text:  # 암호/배포용 등 읽을 수 없는 한글 문서
             stat["hwp_only"] += 1

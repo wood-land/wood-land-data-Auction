@@ -445,8 +445,43 @@ def _ebook_card_rows(soup, base, board):
 _PAGER_HREF_RE = re.compile(r"(?:^|[?&])(?:page|pageno|pageindex|cpage|curpage|currentpage|pagenum)=\d+|gopage|fn_?page|movepage", re.I)
 
 
+# 원주시 시보: contents.do 는 겉틀이고 목록은 iframe(catalist5.jsp)의 JS 배열 arItem 에 있다. PDF 는 없고 본문 텍스트가 쪽별 XML(search.xml)로 올라가 있다
+# (사이트 점검 2026-10-31: 제834호~제1871호 1,017건, 항목마다 호수·날짜·문서번호·쪽수)
+_WONJU_HOST = "www.wonju.go.kr"
+_WONJU_LIST = "https://www.wonju.go.kr/e-book/include/catalist5.jsp?Dir=0205000000&sort=rcode"
+_WONJU_ITEM_RE = re.compile(r"arItem\[\d+\]\s*=\s*new Array\((.*?)\);")  # 제목에 ")" 가 들어 있어 [^)]* 로는 못 끊는다
+_WONJU_SEARCH_RE = re.compile(r"/e-book/catImage/(\d+)/search\.xml$")
+_WONJU_KEEP = 40  # 목록은 최신순 1,017건 - 최신 호만 쓴다
+
+
+def _is_wonju_ebook(url):
+    return _WONJU_HOST in url and ("/ecatalog/" in url or "/e-book/" in url)
+
+
+def wonju_rows(html, board):
+    """catalist5.jsp 의 arItem 배열 -> 목록 행. 항목: ('0205T40000','AFC00','제1871호(2026.10.30.)','2109',...) 네 번째가 search.xml 의 문서번호."""
+    rows = []
+    for raw in _WONJU_ITEM_RE.findall(html)[:_WONJU_KEEP]:
+        f = re.findall(r"'([^']*)'", raw)
+        if len(f) < 4:
+            continue
+        m = re.match(r"(제\s?\d+\s?호)\s*\(?\s*(20\d\d[.\-]\s?\d{1,2}[.\-]\s?\d{1,2})", f[2])
+        if not m:
+            continue
+        date = _parse_date(m.group(2))
+        rows.append({"board": board["name"], "notice_no": m.group(1), "title": f"원주시시보 {m.group(1)}", "date": date,
+                     "date_str": date.isoformat() if date else "",
+                     "detail_url": f"https://{_WONJU_HOST}/e-book/catImage/{f[3]}/search.xml"})
+    return rows
+
+
 def fetch_list_page(session, base_url, board, page_index, page_unit=10):
     """목록 페이지 1개 -> [{"board","notice_no","title","date","date_str","detail_url"}, ...]"""
+    if _is_wonju_ebook(base_url):
+        if page_index > 1:
+            return []
+        resp = _get(session, _WONJU_LIST)
+        return wonju_rows(resp.content.decode("utf-8", errors="replace"), board)
     if page_index == 1:
         url = base_url
     else:
@@ -529,6 +564,9 @@ def fetch_list_page(session, base_url, board, page_index, page_unit=10):
 
 def fetch_attachments(session, detail_url):
     """첨부파일 [{"name","url","ext"}, ...] — 목록에서 본 첨부 + 상세 페이지의 첨부(다운로드는 하지 않음)."""
+    wm = _WONJU_SEARCH_RE.search(detail_url or "")
+    if wm:  # 원주시 시보: 본문 텍스트 XML 이 곧 첨부(상세 페이지 없음)
+        return [{"name": f"원주시시보_{wm.group(1)}.xml", "url": detail_url, "ext": "xml"}]
     found = list(_LIST_FILES.get(detail_url, []))
     seen = {a["url"] for a in found}
     if not detail_url:
