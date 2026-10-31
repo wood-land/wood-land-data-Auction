@@ -70,12 +70,14 @@ def main():
                     f"- 사유: {v.get('note','')}\n- 처리: {v.get('runner','')} / {v.get('date','')}\n\n"
                     f"확인 자료(비공개 DB 저장소): [{cd}.jpg]({DB_URL}/review/{cd}.jpg) · [{cd}.json]({DB_URL}/review/{cd}.json)\n"
                     f"EIASS 초안공람: {EIASS_URL}\n\n"
-                    f"처리 방법: 경계를 손으로 맞춰 `eiass/projects/{cd}.geojson` 을 넣으면(georef 가 '자동'으로 시작하지 않게) "
-                    f"다음 실행에서 완료로 바뀌고 이 이슈가 닫힙니다. 공람이 끝나기 전에 처리해야 평가서를 볼 수 있습니다.")
+                    f"**지리참조 요청**: 도면 PNG [{cd}_review.png]({DB_URL}/figures/{cd}_review.png) 를 QGIS 지리참조자에 올려 "
+                    f"기준점(도로 교차점·시설 모서리 등)을 **2점 이상** 찍고, GCP 점을 `eiass/manual/{cd}.points` 로 저장해 주세요. "
+                    f"그다음 `python run_manual.py {cd}` 를 실행하면 경계·PNU 가 만들어집니다(등급 C). 요청 정보: `figures/{cd}_review.json`.\n"
+                    f"(경계를 직접 맞췄다면 `eiass/projects/{cd}.geojson` 을 넣어도 됩니다. 공람이 끝나기 전에 처리해야 평가서를 볼 수 있습니다.)")
             v["issue"] = create(f"[eiass 확인필요] {cd} {v.get('biz_nm','')}"[:120], body)
             print(f"이슈 생성 #{v['issue']} {cd}"); changed = True
         elif num and not need_human:
-            why = {"ok": "완료되어", "skip": "공람이 끝나(파일 비공개)"}.get(v.get("status"), f"상태가 {v.get('status')}(으)로 바뀌어")
+            why = {"ok": "완료되어", "skip": "자동 추출 대상이 아니거나 공람이 끝나(파일 비공개)"}.get(v.get("status"), f"상태가 {v.get('status')}(으)로 바뀌어")
             update(num, state="closed", comment=f"{why} 닫습니다. ({v.get('note','')})")
             print(f"이슈 닫음 #{num} {cd}"); v["issue"] = None; changed = True
     # PC 대기 중 공람 마감 임박

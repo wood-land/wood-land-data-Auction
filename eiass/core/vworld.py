@@ -111,15 +111,24 @@ def address_variants(location_text):
     base = re.sub(r"\s+", " ", base).strip()
     toks = base.split(" ")
     sido = toks[0] if toks else ""
+    for i in range(1, len(toks)):   # 같은 주소가 두 번 이어 붙은 글('시도 시 동 (도로 번호) 시도 시 동')은 앞쪽만
+        if toks[i] == sido and len(sido) >= 3:
+            toks = toks[:i]; base = " ".join(toks); break
     variants = [base]
     for alt in SIDO_ALIAS.get(sido, []):
         variants.append((alt + " " + " ".join(toks[1:])).strip())
     cands = []
     for v in variants:
-        cands.append((v, "PARCEL"))
+        parcel = (v, "PARCEL")
+        rd = None
         if road:
-            pre = " ".join(w for w in v.split(" ") if re.search(r"(시|군|구|읍|면)$", w))
-            cands.append((pre + " " + road.group(1), "ROAD"))
+            pre = " ".join(dict.fromkeys(w for w in v.split(" ") if re.search(r"(시|군|구|읍|면)$", w)))
+            rd = (pre + " " + road.group(1), "ROAD")
+        # 번지가 없는 지번 주소('... 아미리 일원')는 동·리 중심으로만 잡혀 거칠다 -> 도로명 번지가 있으면 그쪽을 먼저
+        if rd and not re.search(r"\d", v):
+            cands += [rd, parcel]
+        else:
+            cands += [parcel] + ([rd] if rd else [])
     return cands
 
 

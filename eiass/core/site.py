@@ -135,3 +135,26 @@ def parse_plan_area(texts):
         if pool:
             return max(set(pool), key=pool.count)
     return None
+
+
+ROUTE_MAX_KM = 10.0
+
+
+def route_parts(location):
+    """노선형 사업(도로·철도 등)의 사업지위치는 '시점 주소 ~ 종점 주소' 꼴이다. 두 주소를 돌려준다(아니면 빈 목록)"""
+    parts = [x.strip() for x in re.split(r"[~∼〜]", location or "") if x.strip()]
+    return parts[:2] if len(parts) >= 2 else []
+
+
+def parse_route_km(texts):
+    """평가서 글에서 노선 연장(km). '연장 7.143㎞', '연장(L) ... 7.143km' 꼴. 못 읽으면 None"""
+    pat = re.compile(r"연\s*장\s*(?:\(\s*[Ll]\s*\))?[^0-9\n]{0,15}?([\d,]+(?:\.\d+)?)\s*(?:km|㎞)")
+    for t in texts:
+        for m in pat.finditer(t):
+            try:
+                v = float(m.group(1).replace(",", ""))
+            except ValueError:
+                continue
+            if 0.05 < v < 1000:
+                return v
+    return None

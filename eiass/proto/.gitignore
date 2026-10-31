@@ -1,0 +1,13 @@
+# 시험 산출물(도면 PNG·좌표 JSON·로그·시험 DB)은 올리지 않는다. 스크립트만 올린다
+*.png
+*.jpg
+*.json
+*.log
+*.gpkg
+*.pgw
+*.prj
+*.geojson
+*.tif
+*.xml
+_flow*/
+_single_test.*

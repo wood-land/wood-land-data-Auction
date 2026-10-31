@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 
 from core import extract as ex
-from core import georef, kakao, site, store, vworld
+from core import anchor, figure, georef, kakao, manual, site, store, vworld
 
 FIG_KEYS = [("토지이용계획", 3), ("항공사진", 2), ("중첩", 2), ("배치도", 1), ("지구계", 1)]
 TODAY = datetime.date.today().isoformat()
@@ -61,11 +61,14 @@ def figure_pages(E, sid, n):
     return [p for _, p in cands[:6]], texts
 
 
-def to5186(A, contour):
+def to5186(A, contour, crs=3857):
     from pyproj import Transformer
     from shapely.geometry import Polygon
     XY = georef.apply(A, contour)
-    x, y = Transformer.from_crs(3857, 5186, always_xy=True).transform(XY[:, 0], XY[:, 1])
+    if crs == 5186:
+        x, y = XY[:, 0], XY[:, 1]
+    else:
+        x, y = Transformer.from_crs(crs, 5186, always_xy=True).transform(XY[:, 0], XY[:, 1])
     return Polygon(np.c_[x, y]).buffer(0).simplify(0.3)
 
 
@@ -120,6 +123,19 @@ def preview(poly5186, path, page_img=None, contour=None):
         log("    미리보기 실패:", e)
 
 
+def save_figure(img, path, long_side=2400):
+    """평가서 도면 쪽을 PNG 로 남긴다(지리참조자 작업용). 쪽 px -> PNG px 배율 k 를 돌려준다(실패하면 None)."""
+    try:
+        k = min(1.0, long_side / max(img.shape[:2]))
+        v = cv2.resize(img[:, :, ::-1], None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else img[:, :, ::-1]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(path), v)
+        return k
+    except Exception as err:
+        log("    도면 PNG 저장 실패:", err)
+        return None
+
+
 def review_image(img, e, path):
     try:
         v = img[:, :, ::-1].copy()
@@ -134,6 +150,16 @@ def review_image(img, e, path):
 def judge(r, area_m2, plan):
     """품질검사. (통과여부, 정확도 추정 m, 사유)"""
     diff = (area_m2 / plan - 1) * 100 if plan else None
+    if r["method"] == "anchor":
+        reasons = []
+        if r["inliers"] < 6: reasons.append(f"지번 대응 {r['inliers']}<6")
+        if r["rms_m"] > 12: reasons.append(f"지번 잔차 {r['rms_m']:.1f}m")
+        if r["spread"] < 0.25: reasons.append(f"지번 분포 {r['spread']:.2f}")
+        if not (0.75 <= r["scale_ratio"] <= 1.35): reasons.append(f"축척비 {r['scale_ratio']:.2f}")
+        if diff is not None and abs(diff) > 6: reasons.append(f"면적차 {diff:+.1f}%")
+        if plan is None: reasons.append("계획면적 모름")
+        # 잔차에는 '필지 중심 vs 도면 글자 위치' 차이가 섞여 있어 실제 오차보다 큰 편이다
+        return (not reasons), max(3.0, r["rms_m"]), "; ".join(reasons)
     if r["method"] == "sift":
         reasons = []
         if r["inliers"] < 12: reasons.append(f"대응점 {r['inliers']}<12")
@@ -162,12 +188,17 @@ def process(E, row, state, force=False):
     ov = find_overview(d["files"])
     if not ov:
         return "review", "'사업의 개요' 파일을 못 찾음(파일 이름 확인 필요)", meta, "human"
+    # 사업 상세 화면 영구 링크(GET 으로 열린다)와 평가서 파일 식별자: 제목으로 다시 찾지 않아도 된다
+    meta.update({"eiass_url": f"{site.BASE}/partcptn/choan/choanEiassView.do?BIZ_CD={cd}&BIZ_SEQ={row['biz_seq']}",
+                 "report_file": ov["name"], "report_file_seq": ov["seq"]})
     sid = E.streamdocs_id(ov["seq"], ov["name"])
     n = E.page_count(sid)
     pages, texts = figure_pages(E, sid, n)
     plan = site.parse_plan_area(texts)
     meta["plan_m2"] = plan
     log(f"  위치: {d['location']} | 계획면적 {plan} | 도면 후보 쪽 {pages}")
+    if store.too_large(plan):   # 대규모 사업(당진 석산·새만금 등): 도면 한 장으로 경계를 맞출 수 없고 대략위치 원도 의미가 없다
+        return "skip", f"대규모 사업(계획면적 {plan:,}㎡ > 약 140만㎡): 자동 추출 대상 아님", meta, None
     VW = vworld.available()
     PC = "pc" if not VW else "human"   # 브이월드가 막힌 곳(Actions)의 좌표 맞춤 실패는 PC 에서 다시 해 볼 만하다
     loc = vworld.locate(d["location"]) if VW else kakao.locate(d["location"], vworld.address_variants)
@@ -175,11 +206,27 @@ def process(E, row, state, force=False):
         return "review", "사업지위치 좌표 못 찾음", meta, PC
     lon, lat, how = loc
     log(f"  대략 위치 {lon:.5f},{lat:.5f} ({how})")
+    route = site.route_parts(d["location"])   # 노선형 사업(도로 등): 시점·종점 좌표
+    route_pts, route_km = None, None
+    if route:
+        loc_fn = vworld.locate if VW else (lambda t: kakao.locate(t, vworld.address_variants))
+        pts = [loc_fn(t) for t in route]
+        if all(pts):
+            from pyproj import Geod
+            route_pts = [(pts[0][0], pts[0][1]), (pts[1][0], pts[1][1])]
+            straight = Geod(ellps="WGS84").inv(*route_pts[0], *route_pts[1])[2] / 1000
+            route_km = site.parse_route_km(texts)
+            L = max(route_km or 0, straight)
+            log(f"  노선형 사업: 시점~종점 직선 {straight:.1f}km, 평가서 연장 {route_km}km")
+            if L > site.ROUTE_MAX_KM:
+                return "skip", f"노선형 사업이 너무 김({L:.1f}km > {site.ROUTE_MAX_KM:.0f}km): 자동 추출 대상 아님", meta, None
     fails, first_img = [], None          # (사유, 필요(pc|human), 그림, 경계)
-    cands_review = []                    # 품질검사에 탈락했지만 좌표는 나온 후보(사람이 QGIS 에서 눈으로 확인): (면적차, 폴리곤, 속성)
+    anchor_by_page = {}                  # 쪽 -> 지번 정합 결과(성공·실패 모두)
+    page_of = {}                         # id(그림) -> 쪽(0부터). 사람 요청용 꾸러미에 쓴다
     for p in pages:
         try:
             img = E.render(sid, p)
+            page_of[id(img)] = p
         except Exception as err:
             log(f"  쪽 {p} 그림 실패: {err}"); continue
         cands = ex.extract_candidates(img, max_n=3)
@@ -198,10 +245,23 @@ def process(E, row, state, force=False):
               fails.append((f"척도 이상 px≈{s_est:.3g}m(계획면적 {plan} 확인)", "human", img, e)); continue
           half = max(1500.0, 2.5 * math.sqrt(plan))
           try:
-              if kind == "line" and not VW:
+              r = None
+              if VW:   # 1순위: 도면의 지번 글자를 지적도와 맞춘다(쪽 단위라 후보마다 다시 읽지 않는다)
+                  if p not in anchor_by_page:
+                      anchor_by_page[p] = anchor.anchor_georef(img, s_est, lon, lat, half, log)
+                      if not anchor_by_page[p].get("ok"):
+                          log(f"  지번 정합 안 됨: {anchor_by_page[p].get('reason')}")
+                  if anchor_by_page[p].get("ok"):
+                      r = anchor_by_page[p]
+                      ar = to5186(r["A"], e["contour"], r["crs"]).area
+                      if not judge(r, ar, plan)[0]:    # 이 후보 경계와는 면적이 안 맞음 -> 다른 방법으로
+                          r = None
+              if r is not None:
+                  pass
+              elif kind == "line" and not VW:
                   log("  선 도면은 연속지적도가 필요한데 이 환경에서 브이월드가 막힘 -> 국내 IP PC 에서 처리")
                   fails.append(("선 도면: 국내 IP PC(브이월드) 필요", "pc", img, e)); continue
-              if kind == "aerial":
+              elif kind == "aerial":
                   r = georef.sift_georef(img, ex.aerial_feature_mask(img, e["mask"], box), box, s_est, lon, lat, half, log)
               else:
                   r = georef.chamfer_georef(ex.line_points(img, e["mask"], box), e["contour"], s_est, lon, lat, half, log)
@@ -210,17 +270,13 @@ def process(E, row, state, force=False):
               fails.append((f"좌표 맞춤 오류 {err}", PC, img, e)); continue
           if not r.get("ok"):
               log("  좌표 맞춤 실패:", r.get("reason")); fails.append((f"좌표 맞춤 실패: {r.get('reason')}", PC, img, e)); continue
-          poly = to5186(r["A"], e["contour"])
+          poly = to5186(r["A"], e["contour"], r.get("crs", 3857))
           ok, acc, why = judge(r, poly.area, plan)
           stats = {k: v for k, v in r.items() if k in ("inliers", "matches", "rms_m", "scale_ratio", "spread", "rot_deg",
                                                         "peak_ratio", "coincide", "local_max_m", "cost")}
           log(f"  {r['method']}: {json.dumps(stats, ensure_ascii=False, default=float)} 면적 {poly.area:.0f}㎡ -> {'통과' if ok else '검토: ' + why}")
           if not ok:
               fails.append((f"{r['method']} 품질검사 탈락: {why}", PC, img, e))
-              cands_review.append((abs(poly.area / plan - 1) if plan else 9e9, poly,
-                                   {"method": r["method"], "page": p + 1, "color": e["color"], "quality": why,
-                                    "area_m2": round(poly.area, 1), "area_diff_pct": round((poly.area / plan - 1) * 100, 2) if plan else None,
-                                    **{k: (round(float(v), 3) if isinstance(v, (int, float)) else v) for k, v in stats.items() if v is not None}}))
               continue
           if NOSAVE:
               log(f"  [시험] eiass/_test/ 에 저장. 면적 {poly.area:.0f}㎡ 중심 {poly.centroid.x:.1f},{poly.centroid.y:.1f}(EPSG:5186)")
@@ -228,7 +284,14 @@ def process(E, row, state, force=False):
           from shapely.ops import transform
           meta.update({"area_m2": round(poly.area, 1), "area_diff_pct": round((poly.area / plan - 1) * 100, 2),
                        "accuracy_m": f"약 {acc:.0f}", "georef": f"자동 {r['method']}{'(' + r['imagery'] + ')' if r.get('imagery') else ''} {json.dumps(stats, ensure_ascii=False, default=lambda x: round(float(x), 3))}",
-                       "src": f"{ov['name']} {p + 1}쪽"})
+                       "src": f"{ov['name']} {p + 1}쪽", "grade": "A" if r["method"] == "anchor" else "B"})
+          # 사업지구만 남긴(바깥 투명) 도면 PNG + 월드파일: QGIS 에 끌어 넣으면 제 위치에 놓인다
+          try:
+              if figure.write_site_png(img, e["contour"], r["A"], r.get("crs", 3857), store.DATA / "figures" / f"{cd}_site.png"):
+                  meta["figure_png"] = f"figures/{cd}_site.png"
+          except Exception as err:
+              log("    사업지구 PNG 저장 실패:", err)
+          (store.DATA / "figures" / f"{cd}_review.png").unlink(missing_ok=True)
           store.write_project(cd, meta, transform(Transformer.from_crs(5186, 4326, always_xy=True).transform, poly))
           if vworld.available():
               rows = pnu_rows(poly, r.get("parcels")); how_pnu = "브이월드 연속지적도"
@@ -241,6 +304,7 @@ def process(E, row, state, force=False):
           preview(poly, store.DATA / "preview" / f"{cd}.jpg")
           for f in (store.DATA / "review").glob(f"{cd}.*"):
               f.unlink()
+          store.clear_approx(cd)
           log(f"  저장: 필지 {len(rows)}건 (편입 {sum(1 for x in rows if x['구분'].startswith('편입'))})")
           if NOSAVE:
               return "test", f"{r['method']} 시험 통과(_test 저장)", meta, None
@@ -255,7 +319,21 @@ def process(E, row, state, force=False):
         return "test", f"[{need}] {why}", meta, need
     if img is not None:
         review_image(img, e, store.DATA / "review" / f"{cd}.jpg")
-    store.write_review_candidate(cd, meta, min(cands_review, key=lambda c: c[0])[1:] if cands_review else None)
+        k = save_figure(img, store.DATA / "figures" / f"{cd}_review.png")   # 사람이 지리참조자에 올릴 도면(쪽 전체)
+        if k:   # 지리참조 결과(.points)를 쪽 px 로 되돌리고 경계를 옮기는 데 필요한 정보
+            manual.write_request(store.DATA, cd, meta, k=k, page=page_of.get(id(img)), contour=None if e is None else e["contour"],
+                                 plan=plan, lonlat=(lon, lat), size=img.shape[:2])
+    try:   # 단서가 부족해도 대표지번 주변 원과 대표지번 필지는 QGIS 에 남긴다
+        pg = None
+        if str(how).startswith("PARCEL"):
+            from shapely.geometry import Point, shape
+            for f in vworld.parcels_bbox(lon - 0.0004, lat - 0.0004, lon + 0.0004, lat + 0.0004, cell=0.01):
+                if shape(f["geometry"]).buffer(0).contains(Point(lon, lat)):
+                    pg = shape(f["geometry"]).buffer(0); break
+        store.write_approx(cd, meta, lon, lat, how, plan, pg, route=route_pts, km=route_km)
+    except Exception as err:
+        log("    대략위치 저장 실패:", err)
+    store.write_review_candidate(cd, meta, None)   # 품질검사 탈락 후보 폴리곤은 믿을 수 없어 목록·gpkg 에 넣지 않는다(예전 파일만 지운다)
     (store.DATA / "review" / f"{cd}.json").write_text(json.dumps({**meta, "reason": why, "need": need, "pages": pages,
                                                                  "file": ov["name"]}, ensure_ascii=False, indent=1), encoding="utf-8")
     return "review", why, meta, need
@@ -272,6 +350,7 @@ def main():
     a = ap.parse_args()
     global NOSAVE
     NOSAVE = a.test
+    log(f"Tesseract(kor) {'있음 - 지번 앵커 정합 사용' if anchor.available() else '없음 - 지번 앵커 정합은 건너뜀(README 의 PC 설치 참고)'}")
     log(f"브이월드 {'사용 가능' if vworld.available() else '막힘(위성영상 Esri, 위치·PNU 카카오로 대신)'} / 카카오 키 {'있음' if kakao.KEY else '없음'}")
     if not vworld.available() and not kakao.KEY:
         log("::error::브이월드도 막히고 KAKAO_REST_API_KEY 도 없음"); return 2

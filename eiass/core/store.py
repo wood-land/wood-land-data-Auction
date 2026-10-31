@@ -5,9 +5,10 @@ eiass/
   projects/{사업코드}.geojson   사업지구 1건(EPSG:4326). 사업마다 파일 하나라 git 변경이 작다
   parcels/{사업코드}.csv        편입 필지(PNU, 지번, 편입면적·비율)
   preview/{사업코드}.jpg        위성영상 위 경계(확인용, 작게)
+  figures/{사업코드}.png        평가서의 토지이용계획도 쪽 그림(지리참조자·사람 확인용. 공람이 끝나면 원본이 비공개라 보존)
   review/{사업코드}.json|.jpg   자동 품질검사를 통과 못 한 사업(사람이 확인)
   state.json                    처리 이력(같은 사업을 매일 다시 하지 않게)
-  EIASS_초안사업지.gpkg         QGIS 용 묶음: 레이어 '사업지구' + 표 '편입필지' (매 실행 projects/·parcels/ 로 다시 만든다)
+  EIASS_초안사업지.gpkg         QGIS 용 묶음: 레이어 'EIASS_초안사업지' 하나(필드 '구분'으로 사업지구·대략위치·대표지번필지 구분) + 표 '편입필지' (매 실행 projects/·parcels/ 로 다시 만든다)
 """
 import csv
 import json
@@ -32,11 +33,11 @@ def _db_repo_dir():
 DATA = Path(os.environ.get("EIASS_DATA_DIR") or _db_repo_dir() / "eiass")
 GPKG = DATA / "EIASS_초안사업지.gpkg"
 FIELDS = ["biz_cd", "biz_nm", "biz_type", "location", "choan_period", "plan_m2", "area_m2", "area_diff_pct",
-          "accuracy_m", "georef", "src", "extracted"]
+          "accuracy_m", "georef", "grade", "src", "extracted", "eiass_url", "report_file", "report_file_seq", "figure_png"]
 
 
 def ensure_dirs():
-    for d in ("projects", "parcels", "preview", "review"):
+    for d in ("projects", "parcels", "preview", "review", "figures", "approx"):
         (DATA / d).mkdir(parents=True, exist_ok=True)
 
 
@@ -68,7 +69,12 @@ def seed_from_gpkg(state):
     if not GPKG.exists() or any((DATA / "projects").glob("*.geojson")):
         return
     import geopandas as gpd
-    g = gpd.read_file(GPKG, layer="사업지구").to_crs(4326)
+    import pyogrio
+    layers = [l[0] for l in pyogrio.list_layers(GPKG)]
+    g = gpd.read_file(GPKG, layer=LAYER if LAYER in layers else "사업지구")
+    if "구분" in g.columns:
+        g = g[g["구분"] == "사업지구"]
+    g = g.to_crs(4326)
     for _, r in g.iterrows():
         props = {k: (None if str(r.get(k)) == "nan" else r.get(k)) for k in FIELDS if k in g.columns}
         write_project(r["biz_cd"], props, r.geometry)
@@ -93,8 +99,8 @@ def write_parcels(biz_cd, rows):
 
 
 def write_review_candidate(biz_cd, meta, cand):
-    """품질검사에서 탈락했지만 좌표는 나온 후보 중 계획면적과 가장 가까운 폴리곤을 review/{사업코드}.geojson(EPSG:4326)에 남긴다.
-    QGIS 에서 '검토후보' 레이어로 보고 맞으면 projects/ 로 옮겨 확정한다. 후보가 없으면 예전 파일을 지운다."""
+    """(품질검사 탈락 후보 폴리곤은 믿을 수 없어 목록·gpkg 에 넣지 않는다. cand=None 으로 불러 예전 review/{사업코드}.geojson 만 지운다.
+    cand 가 있으면 예전 방식대로 그 폴리곤을 review/{사업코드}.geojson(EPSG:4326)에 쓴다)"""
     p = DATA / "review" / f"{biz_cd}.geojson"
     if not cand:
         if p.exists():
@@ -111,22 +117,86 @@ def write_review_candidate(biz_cd, meta, cand):
     gdf.to_file(p, driver="GeoJSON")
 
 
+APPROX_MAX_M = 1000.0
+
+
+def approx_radius_raw(plan_m2):
+    """대략 위치 원 반지름(m): 계획면적과 같은 면적 원 반지름의 1.5배(대표지번이 사업지 가장자리일 수 있다), 최소 300. 면적을 모르면 500"""
+    import math
+    return 500.0 if not plan_m2 else max(300.0, 1.5 * math.sqrt(plan_m2 / math.pi))
+
+
+def too_large(plan_m2):
+    """원 반지름이 APPROX_MAX_M(1km)를 넘는 대규모 사업(약 140만㎡ 초과)은 자동 추출 대상에서 뺀다"""
+    return bool(plan_m2) and approx_radius_raw(plan_m2) > APPROX_MAX_M
+
+
+def approx_radius(plan_m2):
+    return min(APPROX_MAX_M, approx_radius_raw(plan_m2))
+
+
+def write_approx(biz_cd, meta, lon, lat, how, plan_m2, parcel_geom4326=None, route=None, km=None):
+    """도면 단서로 못 맞춘 사업: 대표지번(주소) 위치 주변 반경 원 + 대표지번 필지를 approx/ 에 남긴다. QGIS '대략위치'·'대표지번필지' 레이어."""
+    import geopandas as gpd
+    from pyproj import Transformer
+    from shapely.geometry import Point
+    from shapely.ops import transform
+    r = approx_radius(plan_m2)
+    if route:   # 노선형 사업: 반경을 정하기 어렵다 -> 시점과 종점을 실선으로 이을 뿐이다(폴리곤 한 종류로 두려고 12m 폭으로 부풀린다)
+        from shapely.geometry import LineString
+        t1 = Transformer.from_crs(4326, 5186, always_xy=True).transform
+        t2 = Transformer.from_crs(5186, 4326, always_xy=True).transform
+        line = transform(t2, transform(t1, LineString(route)).buffer(12, cap_style=2))
+        props = {**{k: meta.get(k) for k in ("biz_cd", "biz_nm", "location", "eiass_url", "plan_m2")}, "형태": "노선", "연장_km": km,
+                 "상태": "대략위치(노선형 사업: 시점~종점 직선, 지리참조 필요)"}
+        props["biz_cd"] = biz_cd
+        (DATA / "approx").mkdir(parents=True, exist_ok=True)
+        gpd.GeoDataFrame([props], geometry=[line], crs=4326).to_file(DATA / "approx" / f"{biz_cd}.geojson", driver="GeoJSON")
+        (DATA / "approx" / f"{biz_cd}_parcel.geojson").unlink(missing_ok=True)
+        return
+    to5186 = Transformer.from_crs(4326, 5186, always_xy=True).transform
+    to4326 = Transformer.from_crs(5186, 4326, always_xy=True).transform
+    circle = transform(to4326, transform(to5186, Point(lon, lat)).buffer(r, 64))
+    props = {**{k: meta.get(k) for k in ("biz_cd", "biz_nm", "location", "eiass_url", "plan_m2")}, "형태": "원", "radius_m": round(r), "위치근거": how,
+             "상태": "대략위치(도면 단서 부족: 대표지번 주변 원, 지리참조 필요)"}
+    props["biz_cd"] = biz_cd
+    (DATA / "approx").mkdir(parents=True, exist_ok=True)
+    gpd.GeoDataFrame([props], geometry=[circle], crs=4326).to_file(DATA / "approx" / f"{biz_cd}.geojson", driver="GeoJSON")
+    pp = DATA / "approx" / f"{biz_cd}_parcel.geojson"
+    if parcel_geom4326 is not None:
+        gpd.GeoDataFrame([{k: props[k] for k in ("biz_cd", "biz_nm", "location")}], geometry=[parcel_geom4326], crs=4326).to_file(pp, driver="GeoJSON")
+    elif pp.exists():
+        pp.unlink()
+
+
+def clear_approx(biz_cd):
+    for f in (DATA / "approx").glob(f"{biz_cd}*.geojson"):
+        f.unlink()
+
+
+LAYER = "EIASS_초안사업지"   # gpkg 안의 레이어는 하나. 종류는 필드 '구분'(사업지구·대략위치·대표지번필지)
+
+
 def rebuild_gpkg():
     import geopandas as gpd
     import pandas as pd
-    files = sorted((DATA / "projects").glob("*.geojson"))
-    if not files:
+    parts = []
+    for kind, files in (
+            ("사업지구", sorted((DATA / "projects").glob("*.geojson"))),
+            ("대략위치", [f for f in sorted((DATA / "approx").glob("*.geojson")) if not f.stem.endswith("_parcel")]),   # 도면 단서 부족: 대표지번 주변 원
+            ("대표지번필지", sorted((DATA / "approx").glob("*_parcel.geojson")))):
+        for f in files:
+            g = gpd.read_file(f)
+            g.insert(0, "구분", kind)
+            parts.append(g)
+    if not parts:
         return 0
-    g = pd.concat([gpd.read_file(f) for f in files], ignore_index=True)
-    g = gpd.GeoDataFrame(g, crs=4326).to_crs(5186)
+    g = gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), crs=4326).to_crs(5186)
+    n_main = int((g["구분"] == "사업지구").sum())
     tmp = GPKG.with_suffix(".tmp.gpkg")
     if tmp.exists():
         tmp.unlink()
-    g.to_file(tmp, layer="사업지구", driver="GPKG")
-    rfiles = sorted((DATA / "review").glob("*.geojson"))
-    if rfiles:  # 검토후보 레이어: 품질검사에 탈락한 후보 폴리곤(사람이 확인 전). 확정되면 projects/ 로 옮기고 이 파일은 지워진다
-        gr = pd.concat([gpd.read_file(f) for f in rfiles], ignore_index=True)
-        gpd.GeoDataFrame(gr, crs=4326).to_crs(5186).to_file(tmp, layer="검토후보", driver="GPKG")
+    g.to_file(tmp, layer=LAYER, driver="GPKG")
     rows = []
     for f in sorted((DATA / "parcels").glob("*.csv")):
         with open(f, encoding="utf-8-sig") as fp:
@@ -144,4 +214,4 @@ def rebuild_gpkg():
         # tmp 파일을 남기면 git 에 올라가므로 지운다.
         tmp.unlink(missing_ok=True)
         print(f"[주의] {GPKG.name} 이 다른 프로그램(QGIS 등)에서 열려 있어 새로 만들지 못했습니다. 닫고 다시 실행하거나 다음 실행(Actions 포함)에서 만들어집니다.")
-    return len(g)
+    return n_main
