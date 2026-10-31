@@ -9,6 +9,7 @@ run_gazette.py — 지자체 공보(시보·군보·도보·구보·공보) 최�
 게시판 목록의 원본은 엑셀(output/시군구_공보게시판_목록.xlsx, '공보게시판' 시트)이다.
   - 'D열 종류 / E열 게시판 URL / F열 판정' 을 읽고, 'L열 사용자 입력 URL'이 있으면 그것을 우선한다.
   - 판정이 '미발견'이고 사용자 입력 URL도 없으면 건너뛴다(수동 확인 필요 목록).
+  - 판정이 '제외'로 시작하면 URL 이 있어도 수집하지 않는다(사용자가 뺀 게시판: 경기도청 도보는 양이 너무 많고, 서산시·제주시·서귀포시는 공보가 없다).
 처리: 목록(최근 N일) -> 게시글 첨부 -> 미리보기(Synap/한컴 뷰어) OCR 우선, 안 되면 다운로드(메모리) 후
 본문 추출/스캔 PDF OCR -> 공고 단위 분할 -> 보상 관련 공고만 -> 소재지·지번 추출(core/gazette_extractor.py).
 결과: output/gazette/gazette_addresses.csv(주소 행), gazette_notices.csv(보상 관련 공고 목록),
@@ -91,6 +92,8 @@ def load_boards(excel_path):
         user_url = row[idx["사용자 입력 URL"]] if "사용자 입력 URL" in idx else None
         url = (user_url or "").strip() if user_url else ""
         judged = row[idx["판정"]]
+        if str(judged or "").startswith("제외"):
+            continue
         if not url and judged != "미발견":
             url = row[idx["게시판 URL"]] or ""
         if not url:
