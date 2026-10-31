@@ -176,6 +176,7 @@ def process(E, row, state, force=False):
     lon, lat, how = loc
     log(f"  대략 위치 {lon:.5f},{lat:.5f} ({how})")
     fails, first_img = [], None          # (사유, 필요(pc|human), 그림, 경계)
+    cands_review = []                    # 품질검사에 탈락했지만 좌표는 나온 후보(사람이 QGIS 에서 눈으로 확인): (면적차, 폴리곤, 속성)
     for p in pages:
         try:
             img = E.render(sid, p)
@@ -192,6 +193,9 @@ def process(E, row, state, force=False):
           log(f"  쪽 {p} [{e['color']}]: 경계 {len(e['contour'])}점 면적 {e['area_px']:.0f}px 추종 {e['red_frac']:.2f} 배경 {kind}(흰 {white:.2f}) px≈{s_est and round(s_est,3)}m")
           if not s_est:
               fails.append(("계획면적을 평가서에서 못 읽음", "human", img, e)); continue
+          if not (0.02 <= s_est <= 200):  # 도면 한 픽셀이 2cm 미만이거나 200m 초과면 계획면적·경계 읽기가 틀린 것(좌표 맞춤에서 수학 오류가 난다)
+              log(f"  척도 이상(px≈{s_est:.3g}m): 계획면적 또는 경계 읽기 오류로 보고 건너뜀")
+              fails.append((f"척도 이상 px≈{s_est:.3g}m(계획면적 {plan} 확인)", "human", img, e)); continue
           half = max(1500.0, 2.5 * math.sqrt(plan))
           try:
               if kind == "line" and not VW:
@@ -212,7 +216,12 @@ def process(E, row, state, force=False):
                                                         "peak_ratio", "coincide", "local_max_m", "cost")}
           log(f"  {r['method']}: {json.dumps(stats, ensure_ascii=False, default=float)} 면적 {poly.area:.0f}㎡ -> {'통과' if ok else '검토: ' + why}")
           if not ok:
-              fails.append((f"{r['method']} 품질검사 탈락: {why}", PC, img, e)); continue
+              fails.append((f"{r['method']} 품질검사 탈락: {why}", PC, img, e))
+              cands_review.append((abs(poly.area / plan - 1) if plan else 9e9, poly,
+                                   {"method": r["method"], "page": p + 1, "color": e["color"], "quality": why,
+                                    "area_m2": round(poly.area, 1), "area_diff_pct": round((poly.area / plan - 1) * 100, 2) if plan else None,
+                                    **{k: (round(float(v), 3) if isinstance(v, (int, float)) else v) for k, v in stats.items() if v is not None}}))
+              continue
           if NOSAVE:
               log(f"  [시험] eiass/_test/ 에 저장. 면적 {poly.area:.0f}㎡ 중심 {poly.centroid.x:.1f},{poly.centroid.y:.1f}(EPSG:5186)")
           from pyproj import Transformer
@@ -246,6 +255,7 @@ def process(E, row, state, force=False):
         return "test", f"[{need}] {why}", meta, need
     if img is not None:
         review_image(img, e, store.DATA / "review" / f"{cd}.jpg")
+    store.write_review_candidate(cd, meta, min(cands_review, key=lambda c: c[0])[1:] if cands_review else None)
     (store.DATA / "review" / f"{cd}.json").write_text(json.dumps({**meta, "reason": why, "need": need, "pages": pages,
                                                                  "file": ov["name"]}, ensure_ascii=False, indent=1), encoding="utf-8")
     return "review", why, meta, need

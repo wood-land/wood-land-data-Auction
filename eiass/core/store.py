@@ -92,6 +92,25 @@ def write_parcels(biz_cd, rows):
             w.writerow({"biz_cd": biz_cd, **r})
 
 
+def write_review_candidate(biz_cd, meta, cand):
+    """품질검사에서 탈락했지만 좌표는 나온 후보 중 계획면적과 가장 가까운 폴리곤을 review/{사업코드}.geojson(EPSG:4326)에 남긴다.
+    QGIS 에서 '검토후보' 레이어로 보고 맞으면 projects/ 로 옮겨 확정한다. 후보가 없으면 예전 파일을 지운다."""
+    p = DATA / "review" / f"{biz_cd}.geojson"
+    if not cand:
+        if p.exists():
+            p.unlink()
+        return
+    import geopandas as gpd
+    from pyproj import Transformer
+    from shapely.ops import transform
+    poly, props = cand
+    g4326 = transform(Transformer.from_crs(5186, 4326, always_xy=True).transform, poly)
+    gdf = gpd.GeoDataFrame([{**{k: meta.get(k) for k in ("biz_cd", "biz_nm", "biz_type", "location", "choan_period", "plan_m2")},
+                             **props, "상태": "검토후보(자동 품질검사 탈락)"}], geometry=[g4326], crs=4326)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    gdf.to_file(p, driver="GeoJSON")
+
+
 def rebuild_gpkg():
     import geopandas as gpd
     import pandas as pd
@@ -104,6 +123,10 @@ def rebuild_gpkg():
     if tmp.exists():
         tmp.unlink()
     g.to_file(tmp, layer="사업지구", driver="GPKG")
+    rfiles = sorted((DATA / "review").glob("*.geojson"))
+    if rfiles:  # 검토후보 레이어: 품질검사에 탈락한 후보 폴리곤(사람이 확인 전). 확정되면 projects/ 로 옮기고 이 파일은 지워진다
+        gr = pd.concat([gpd.read_file(f) for f in rfiles], ignore_index=True)
+        gpd.GeoDataFrame(gr, crs=4326).to_crs(5186).to_file(tmp, layer="검토후보", driver="GPKG")
     rows = []
     for f in sorted((DATA / "parcels").glob("*.csv")):
         with open(f, encoding="utf-8-sig") as fp:
@@ -114,5 +137,11 @@ def rebuild_gpkg():
         con.execute("INSERT OR REPLACE INTO gpkg_contents(table_name,data_type,identifier,description) "
                     "VALUES('편입필지','attributes','편입필지','사업지구와 겹치는 연속지적도 필지(PNU)')")
         con.commit(); con.close()
-    os.replace(tmp, GPKG)
+    try:
+        os.replace(tmp, GPKG)
+    except PermissionError:
+        # QGIS 등이 gpkg 를 열어 둔 상태(Windows 는 열린 파일을 바꿀 수 없다). projects/ 는 이미 저장돼 있어 gpkg 는 다음 실행에서 다시 만들면 된다.
+        # tmp 파일을 남기면 git 에 올라가므로 지운다.
+        tmp.unlink(missing_ok=True)
+        print(f"[주의] {GPKG.name} 이 다른 프로그램(QGIS 등)에서 열려 있어 새로 만들지 못했습니다. 닫고 다시 실행하거나 다음 실행(Actions 포함)에서 만들어집니다.")
     return len(g)

@@ -128,7 +128,8 @@ def parse_plan_area(texts):
             A.append(int(m.group(2).replace(",", "")))
         for m in re.finditer(r"합\s*계\s*([\d,]{5,})", t):
             B.append(int(m.group(1).replace(",", "")))
-    A = [v for v in A if v > 1000]; B = [v for v in B if v > 1000]
+    # 표 칸이 구분 없이 이어 붙어 읽힌 값('840742840742840742...')은 면적이 아니다: 현실적인 범위(20억㎡ 미만)만 남긴다
+    A = [v for v in A if 1000 < v < 2_000_000_000]; B = [v for v in B if 1000 < v < 2_000_000_000]
     both = [v for v in B if v in A]
     for pool in (both, B, A):
         if pool:
