@@ -103,6 +103,8 @@ def download_jose_rows(session, adapter, attachments, title, crawled_at, city: C
                     data = _download(session, adapter, att, detail_url)  # Referer 가 없으면 막는 서버(가평군 실측)
                 else:
                     raise
+            if jose_extractor.not_a_document(data):  # 오류·이동 안내 페이지를 받은 것(통영시·해운대구 실측) - 다시 받도록 다운로드 실패로 기록한다
+                raise requests.HTTPError(f"첨부 대신 문서가 아닌 응답 {len(data)}바이트")
             report = {}
             got = jose_extractor.extract_from_attachment(
                 data, att["ext"], att["name"], title, regions,

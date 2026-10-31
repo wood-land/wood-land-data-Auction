@@ -1289,10 +1289,35 @@ def full_text(ext, data):
                 root = ET.fromstring(z.read("word/document.xml"))
             paras = (clean("".join(x.text or "" for x in p.iter(W + "t"))) for p in root.iter(W + "p"))
             return "\n".join(t for t in paras if t)
+        if _is_legacy_hwp(ext, data):
+            return _legacy_hwp_text(data)
         grids = local_grids(ext, data)
         return grids_text(grids) if grids else ""
     except Exception:  # 본문을 못 읽으면 AI 보정을 건너뛸 뿐이다
         return ""
+
+
+_OLE_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def _is_legacy_hwp(ext, data):
+    """확장자는 .hwpx/.hwp 인데 내용이 구버전 이진 한글(OLE)인 첨부. 강원도청·강릉시·경상북도청·달성군 실데이터로 확인(2026-10-28~29)."""
+    return (ext or "").lower() in ("hwp", "hwpx") and data.startswith(_OLE_SIGNATURE)
+
+
+def _legacy_hwp_text(data):
+    """구버전 한글 본문 텍스트(표는 문단으로 풀려 나온다). 암호·배포용 등 읽을 수 없으면 ''."""
+    from core import hwp_text
+    try:
+        return hwp_text.hwp_to_text(data)
+    except hwp_text.HwpUnsupported:
+        return ""
+
+
+def not_a_document(data):
+    """첨부로 받았는데 문서가 아니라 오류·이동 안내 페이지(HTML/스크립트/공백)인 경우 — 통영시·해운대구 첨부에서 실제로 나옴(2026-10-27~29)."""
+    head = data[:600].lstrip(b"\r\n\t \x00").lower()
+    return len(data) < 5000 and (not head or head.startswith((b"<", b"{")))
 
 
 # 토지 목록이 아닌 양식 첨부(의견제출서·이의신청서·동의서 등). 파일명에 '조서'가 있으면 양식이라도 읽는다.
@@ -1378,7 +1403,8 @@ def extract_from_attachment(data, ext, filename, title, regions, site_name="", c
         if nonland_file:
             rep["code"], rep["detail"] = "NOT_LAND", "입찰·설계·계약 서류(필지 목록 아님)라 읽지 않음"
             return []
-    grids = local_grids(ext, data)
+    legacy_hwp = _is_legacy_hwp(ext, data)
+    grids = [] if legacy_hwp else local_grids(ext, data)  # 구버전 한글은 표를 못 읽으니 본문 텍스트 규칙으로 읽는다
     if grids is None:
         rep["code"], rep["detail"] = "UNSUPPORTED", f"형식 {ext} 을(를) 표로 읽을 수 없음(또는 확장자와 실제 형식 불일치)"
         return []
@@ -1387,7 +1413,7 @@ def extract_from_attachment(data, ext, filename, title, regions, site_name="", c
     rep["skipped_lots"] = sum(1 for d in debug if d.get("reason") == "non-parcel-lot")
     rep["skipped_public"] = sum(int(d["heads"][0]) for d in debug if d.get("reason") == "public-owner")
     if not rows:
-        text = pdf_text(data) if ext == "pdf" else grids_text(grids)
+        text = pdf_text(data) if ext == "pdf" else (_legacy_hwp_text(data) if legacy_hwp else grids_text(grids))
         rows = regions.rows_from_text(text)
         project = project_name_from_title(title)
         for r in rows:

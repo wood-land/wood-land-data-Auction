@@ -75,7 +75,10 @@ r8IWKIMxzxLPv5Kt3ePKcUdvkBU/smqujSczTzzSjIoR5QqQA6lN1ZRSnuHIWCvh
 JEltkYnTAH41QJ6SAWO66GrrUESwN/cgZzL4JLEqz1Y=
 -----END CERTIFICATE-----"""
 
-_MISSING_CA_SITE_ROOTS = {"https://www.inje.go.kr", "https://www.sokcho.go.kr"}
+_MISSING_CA_SITE_ROOTS = {"https://www.inje.go.kr", "https://www.sokcho.go.kr", "https://eminwon.sokcho.go.kr"}
+# 속초시 서버는 2026-10 말 현재 TLS 1.0(AES256-SHA)만 받는다(TLS 1.2/1.3 은 SSLV3_ALERT_HANDSHAKE_FAILURE, 실측 2026-10-31).
+# 이 호스트에만 TLS 1.0 과 SECLEVEL=0 을 허용한다. 인증서 검증은 그대로 켠다.
+_LEGACY_TLS_ROOTS = {"https://www.sokcho.go.kr", "https://eminwon.sokcho.go.kr"}
 
 
 class _MissingIntermediateCAAdapter(HTTPAdapter):
@@ -86,19 +89,32 @@ class _MissingIntermediateCAAdapter(HTTPAdapter):
     이미 기본 스위트로 접속되던 곳이라 이 완화가 있어도(더 넓은 스위트를 허용할
     뿐이라) 영향이 없다."""
 
+    legacy_tls = False
+
     def init_poolmanager(self, *args, **kwargs):
         ctx = ssl.create_default_context(cafile=certifi.where())
         ctx.load_verify_locations(cadata=_INJE_MISSING_INTERMEDIATE_PEM)
-        ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+        if self.legacy_tls:
+            ctx.minimum_version = ssl.TLSVersion.TLSv1
+            ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+        else:
+            ctx.set_ciphers("DEFAULT@SECLEVEL=1")
         kwargs["ssl_context"] = ctx
         return super().init_poolmanager(*args, **kwargs)
+
+
+class _LegacyTlsAdapter(_MissingIntermediateCAAdapter):
+    legacy_tls = True
 
 
 def prepare_session(session, city):
     root = f"{urlsplit(city.base_url).scheme}://{urlsplit(city.base_url).netloc}"
     if root in _MISSING_CA_SITE_ROOTS and not getattr(session, f"_ca_mounted_{root}", False):
-        session.mount(root, _MissingIntermediateCAAdapter())
+        session.mount(root, _LegacyTlsAdapter() if root in _LEGACY_TLS_ROOTS else _MissingIntermediateCAAdapter())
         setattr(session, f"_ca_mounted_{root}", True)
+        if root in _LEGACY_TLS_ROOTS:  # 첨부 서버(eminwon)도 같은 세션으로 받으므로 함께 붙인다
+            for extra in _LEGACY_TLS_ROOTS - {root}:
+                session.mount(extra, _LegacyTlsAdapter())
 
 _DATE_CELL_RE = re.compile(r"^\d{4}-\d{1,2}-\d{1,2}$")
 _NOTICE_NO_RE = re.compile(r"(공고|고시)\s*제\s*\d{4}\s*[-–]\s*\d+\s*호")
