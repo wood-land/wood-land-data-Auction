@@ -5,8 +5,8 @@ GitHub 호스티드 러너(미국 IP)에서는 core/blocked_sites.py 의 게시�
   1) git pull(코드·DB 두 저장소)  2) 로그 분석으로 새로 막힌 지자체 등록  3) 막힌 게시판만 수집(run_scheduled.py --blocked only)
   4) 결과 DB 는 DB 저장소(data/)에, 자동 등록 목록은 코드 저장소에 커밋·푸시
 
-저장소가 둘이다(2026-10-18 분리): 코드는 공개 저장소(이 폴더), 수집 결과 DB 는 비공개 저장소이며 옆 폴더(../wood-land-data-db, 없으면 이 폴더의 data/)에 따로 받아 둔다.
-  git clone https://github.com/wood-land/wood-land-data-db.git ../wood-land-data-db   (또는 환경변수 WOOD_LAND_DB_DIR 로 위치 지정)
+저장소가 둘이다(2026-10-18 분리): 코드는 공개 저장소(이 폴더), 수집 결과 DB 는 비공개 저장소이며 코드 저장소 옆 폴더(D:/wood-land-data-db, 없으면 이 폴더의 data/)에 따로 받아 둔다.
+  git clone https://github.com/wood-land/wood-land-data-db.git ../../wood-land-data-db   (또는 환경변수 WOOD_LAND_DB_DIR 로 위치 지정)
 결과는 지역 DB(data/gosi/{지역}.sqlite)가 아니라 별도 파일 data/gosi/국내IP_{지역}.sqlite 에 저장한다. Actions 가 같은 지역 DB 를 계속
 커밋하므로, 같은 파일을 둘이 고치면 sqlite(이진 파일)는 합칠 수 없어 충돌한다. 파일이 다르면 충돌이 없다.
 이 스크립트가 올리는 것은 data/gosi/국내IP_*.sqlite(DB 저장소)와 자동 등록 목록(core/blocked_sites_auto.json, 코드 저장소)뿐이다(git add -A 를 쓰지 않는다).

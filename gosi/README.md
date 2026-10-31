@@ -14,19 +14,18 @@
 - 자세한 내용은 `README_스케줄.md` 참고.
 
 ## 폴더 구성 (PC)
-저장소마다 폴더를 따로 두고 `D:\` 바로 아래에 나란히 clone 한다. DB 저장소는 한 곳만 clone 해서 모든 수집기가 같이 쓴다(`core/paths.py` 가 옆 폴더 `../wood-land-data-db` 를 찾는다).
+저장소 둘을 `D:\` 바로 아래에 나란히 clone 한다. DB 저장소는 **코드 폴더 안이 아니라 옆**에 한 곳만 두고, 모든 수집기(gosi·news·eiass)가 같이 쓴다. 위치는 환경변수 `WOOD_LAND_DB_DIR`, 없으면 코드 저장소 옆 `../wood-land-data-db`(`core/paths.py`).
 ```
-D:\wood-land-data-gosi\    (공개 코드: 고시공고)
-D:\wood-land-data-news\    (공개 코드: 지역신문, 예정)
-D:\wood-land-data-eiass\   (공개 코드: 환경영향평가, 예정)
-D:\wood-land-data-db\      (비공개 DB 저장소, 한 번만 clone: gosi/ news/ eiass/)
+D:\wood-land-data-Auction\   (공개 코드: gosi/ news/ eiass/)
+D:\wood-land-data-db\        (비공개 DB 저장소, 한 번만 clone: gosi/ news/ eiass/)
 ```
+`python setup_pc.py` 가 DB 저장소를 clone 하고 `WOOD_LAND_DB_DIR` 까지 설정해 준다.
 
 ## PC 에서 쓰기 (한 번만 준비)
 ```
-git clone https://github.com/wood-land/wood-land-data-gosi.git
-cd wood-land-data-gosi
-git clone https://github.com/wood-land/wood-land-data-db.git ../wood-land-data-db     # 비공개 DB 저장소(옆 폴더에 한 번만)
+git clone https://github.com/wood-land/wood-land-data-Auction.git
+cd wood-land-data-Auction/gosi
+python setup_pc.py          # 비공개 DB 저장소를 옆 폴더(D:\wood-land-data-db)에 clone + WOOD_LAND_DB_DIR 설정
 pip install -r requirements.txt
 ```
 키·시트 ID 는 저장소에 두지 않는다. `500_local` 폴더(환경변수 `GOSI_LOCAL_DIR`, 또는 이 폴더의 `.local_dir` 파일에 경로 한 줄, 또는 상위 폴더에 있으면 자동) 아래에 둔다:

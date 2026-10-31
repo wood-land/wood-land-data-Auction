@@ -4,7 +4,7 @@ run_pc.py - 국내 IP PC 에서 실행('★PC수집_전체_더블클릭_v….bat
 GitHub Actions 러너(미국 IP)에서는 브이월드가 막혀(2026-10-25 확인) 선 도면(지형·지적 배경) 토지이용계획도를
 연속지적도에 맞추지 못한다. 그런 사업은 review/ 에 '국내 IP PC 필요'로 남는데, 이 PC 에서 브이월드로 마저 처리한다.
   0) PC 이름 확인, 시작 전 점검(못 올린 커밋·충돌이면 중단)
-  1) git pull (코드 저장소 = 이 폴더의 상위, DB 저장소 = ../wood-land-data-db 또는 WOOD_LAND_DB_DIR)
+  1) git pull (코드 저장소 = 이 폴더의 상위, DB 저장소 = 코드 저장소 옆 ../wood-land-data-db 또는 WOOD_LAND_DB_DIR)
   2) python run_eiass.py --pages 3 --retry-review   (새 사업 + 'PC 대기' 사업. '사람 확인' 사업은 건너뛴다)
   3) DB 저장소의 eiass/ 만 커밋·푸시 (git add -A 를 쓰지 않는다). 실행 기록(eiass/pc_runs.jsonl)도 함께 올라간다
 키: 환경변수 또는 500_local 폴더(core/keys.py). PC 두 대(PCwj, PCyw)가 동시에 돌지 않는 것이 전제다.

@@ -88,7 +88,7 @@ python diag.py                # 접속 점검
 python run_eiass.py --pages 2
 python run_eiass.py --codes GG2026B008:45831 --force
 ```
-DB 저장소 위치는 `WOOD_LAND_DB_DIR` 환경변수 -> 형제 폴더 `../wood-land-data-db` -> `eiass/data/` 순서로 찾는다.
+DB 저장소 위치는 `WOOD_LAND_DB_DIR` 환경변수 -> 코드 저장소 옆 폴더 `../wood-land-data-db`(표준: `D:\wood-land-data-db`) -> 예전 방식(코드 폴더 안) -> `eiass/data/` 순서로 찾는다. 결과는 그 폴더의 `eiass/` 에 쌓이고, gosi·news 와 한 저장소를 함께 쓴다.
 
 ## Secrets
 `DATA_DB_TOKEN`, `VWORLD_API_KEY` (news 와 같음), `VWORLD_DOMAIN`(선택: 브이월드가 도메인을 확인할 때)

@@ -4,7 +4,7 @@ setup_pc.py - 새 PC(예: PCyw)를 PC 수집용으로 처음 한 번 준비한�
   python setup_pc.py          # 코드 저장소를 받은 뒤 gosi 폴더에서 실행
 
 하는 일:
-  1) DB 저장소(wood-land-data-db)를 코드 저장소 최상위에 clone(없을 때만)하고, 코드 저장소 git 에서 제외 처리
+  1) DB 저장소(wood-land-data-db)를 코드 저장소 옆 폴더(D:/wood-land-data-db)에 clone(없을 때만)하고, 환경변수 WOOD_LAND_DB_DIR 로 위치를 알려 둔다
   2) 500_local 폴더 위치를 찾고(상위 폴더 중 500_local, 또는 .local_dir), 카카오 키·구글 키·시트 ID 가 보이는지 점검
   3) 이 PC 의 이름(PCwj / PCyw ...)이 없으면 물어서 500_local/pc_name.txt 에 저장
 키 파일은 git 에 없으므로 이 스크립트가 만들어 주지 못한다(다른 PC 에서 500_local 안의 해당 폴더를 직접 복사).
@@ -27,25 +27,26 @@ def step(msg):
 
 
 def clone_db():
-    top = HERE.parent
-    target = top / "wood-land-data-db"
+    """DB 저장소는 한 곳(코드 저장소 옆 D:/wood-land-data-db)에만 둔다. WOOD_LAND_DB_DIR 이 이미 있으면 그 위치를 쓴다."""
+    env = os.environ.get("WOOD_LAND_DB_DIR", "").strip()
+    target = Path(env) if env else HERE.parent.parent / "wood-land-data-db"
+    legacy = HERE.parent / "wood-land-data-db"      # 예전 방식(코드 폴더 안)
+    if legacy.exists() and legacy.resolve() != target.resolve():
+        print(f"(주의) 예전 방식의 DB 폴더가 있습니다: {legacy}"
+              f"\n       수집 결과가 {target} 와 갈라지지 않게, 올리지 않은 변경이 없으면 이 폴더는 지우세요.")
     if (target / ".git").exists():
         print(f"이미 있음: {target}")
     else:
-        rc = subprocess.run(["git", "clone", DB_REPO_URL, str(target)], cwd=top).returncode
+        rc = subprocess.run(["git", "clone", DB_REPO_URL, str(target)], cwd=str(target.parent)).returncode
         if rc != 0:
             print("[실패] clone 에 실패했습니다. GitHub 로그인(비공개 저장소 접근 권한)을 확인하세요.")
             return False
-    exclude = top / ".git" / "info" / "exclude"
-    try:
-        text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-        if "/wood-land-data-db/" not in text:
-            exclude.parent.mkdir(parents=True, exist_ok=True)
-            with open(exclude, "a", encoding="utf-8") as f:
-                f.write(("\n" if text and not text.endswith("\n") else "") + "/wood-land-data-db/\n")
-            print("코드 저장소 git 에서 제외 처리했습니다.")
-    except OSError as e:
-        print(f"(참고) 제외 처리를 못 했습니다: {e}")
+    if not env:
+        os.environ["WOOD_LAND_DB_DIR"] = str(target)
+        if sys.platform == "win32":
+            rc = subprocess.run(["setx", "WOOD_LAND_DB_DIR", str(target)], capture_output=True).returncode
+            print(f"환경변수 WOOD_LAND_DB_DIR={target} 을 저장했습니다(새로 여는 터미널부터 적용)." if rc == 0
+                  else f"(참고) 환경변수를 저장하지 못했습니다. 직접: setx WOOD_LAND_DB_DIR " + chr(34) + str(target) + chr(34))
     return True
 
 
