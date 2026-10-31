@@ -71,6 +71,7 @@ def _main(no_git, rec):
         rec["heads"] = {"code": _head(HERE.parent), "db": _head(db)}
     rec["stage"] = "collect"
     rc = subprocess.call([sys.executable, str(HERE / "run_eiass.py"), "--pages", "3", "--retry-review"], cwd=HERE)
+    subprocess.call([sys.executable, str(HERE / "run_perss.py")], cwd=HERE)   # 소규모환경영향평가 대략위치(실패해도 환경영향평가 결과는 그대로)
     rec["regions"]["eiass"] = {"status": "ok" if rc == 0 else f"exit {rc}"}
     done = "collected" if rc == 0 else f"collect failed (exit {rc})"
     if no_git:

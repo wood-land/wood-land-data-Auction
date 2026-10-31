@@ -135,19 +135,20 @@ def approx_radius(plan_m2):
     return min(APPROX_MAX_M, approx_radius_raw(plan_m2))
 
 
-def write_approx(biz_cd, meta, lon, lat, how, plan_m2, parcel_geom4326=None, route=None, km=None):
+def write_approx(biz_cd, meta, lon, lat, how, plan_m2, parcel_geom4326=None, route=None, km=None, radius_m=None, extra=None):
     """도면 단서로 못 맞춘 사업: 대표지번(주소) 위치 주변 반경 원 + 대표지번 필지를 approx/ 에 남긴다. QGIS '대략위치'·'대표지번필지' 레이어."""
     import geopandas as gpd
     from pyproj import Transformer
     from shapely.geometry import Point
     from shapely.ops import transform
-    r = approx_radius(plan_m2)
+    r = radius_m if radius_m else approx_radius(plan_m2)   # radius_m: 소규모환경영향평가는 면적과 같은 넓이의 원 반지름을 직접 준다
+    extra = extra or {}
     if route:   # 노선형 사업: 반경을 정하기 어렵다 -> 시점과 종점을 실선으로 이을 뿐이다(폴리곤 한 종류로 두려고 12m 폭으로 부풀린다)
         from shapely.geometry import LineString
         t1 = Transformer.from_crs(4326, 5186, always_xy=True).transform
         t2 = Transformer.from_crs(5186, 4326, always_xy=True).transform
         line = transform(t2, transform(t1, LineString(route)).buffer(12, cap_style=2))
-        props = {**{k: meta.get(k) for k in ("biz_cd", "biz_nm", "location", "eiass_url", "plan_m2")}, "형태": "노선", "연장_km": km,
+        props = {**{k: meta.get(k) for k in ("biz_cd", "biz_nm", "location", "eiass_url", "plan_m2")}, "형태": "노선", "연장_km": km, **extra,
                  "상태": "대략위치(노선형 사업: 시점~종점 직선, 지리참조 필요)"}
         props["biz_cd"] = biz_cd
         (DATA / "approx").mkdir(parents=True, exist_ok=True)
@@ -157,14 +158,14 @@ def write_approx(biz_cd, meta, lon, lat, how, plan_m2, parcel_geom4326=None, rou
     to5186 = Transformer.from_crs(4326, 5186, always_xy=True).transform
     to4326 = Transformer.from_crs(5186, 4326, always_xy=True).transform
     circle = transform(to4326, transform(to5186, Point(lon, lat)).buffer(r, 64))
-    props = {**{k: meta.get(k) for k in ("biz_cd", "biz_nm", "location", "eiass_url", "plan_m2")}, "형태": "원", "radius_m": round(r), "위치근거": how,
+    props = {**{k: meta.get(k) for k in ("biz_cd", "biz_nm", "location", "eiass_url", "plan_m2")}, "형태": "원", "radius_m": round(r), "위치근거": how, **extra,
              "상태": "대략위치(도면 단서 부족: 대표지번 주변 원, 지리참조 필요)"}
     props["biz_cd"] = biz_cd
     (DATA / "approx").mkdir(parents=True, exist_ok=True)
     gpd.GeoDataFrame([props], geometry=[circle], crs=4326).to_file(DATA / "approx" / f"{biz_cd}.geojson", driver="GeoJSON")
     pp = DATA / "approx" / f"{biz_cd}_parcel.geojson"
     if parcel_geom4326 is not None:
-        gpd.GeoDataFrame([{k: props[k] for k in ("biz_cd", "biz_nm", "location")}], geometry=[parcel_geom4326], crs=4326).to_file(pp, driver="GeoJSON")
+        gpd.GeoDataFrame([{**{k: props[k] for k in ("biz_cd", "biz_nm", "location")}, **{k: extra[k] for k in ("평가종류", "접수일", "진행현황") if k in extra}}], geometry=[parcel_geom4326], crs=4326).to_file(pp, driver="GeoJSON")
     elif pp.exists():
         pp.unlink()
 
@@ -192,6 +193,9 @@ def rebuild_gpkg():
     if not parts:
         return 0
     g = gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), crs=4326).to_crs(5186)
+    if "평가종류" not in g.columns:
+        g["평가종류"] = None
+    g["평가종류"] = g["평가종류"].fillna("환경영향평가")
     n_main = int((g["구분"] == "사업지구").sum())
     tmp = GPKG.with_suffix(".tmp.gpkg")
     if tmp.exists():
