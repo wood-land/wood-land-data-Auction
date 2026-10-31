@@ -677,11 +677,18 @@ class PNUResolver:
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.cursor()
             # 기사 본문 저장/갱신
+            # 같은 기사를 다시 만나도 id 와 created_at(최초 수집 시각)을 지키고 나머지만 갱신한다.
+            # (INSERT OR REPLACE 는 행을 지웠다 새로 넣어서 매번 '오늘 수집'으로 보였고, 신규 건수를 셀 수 없었다)
             cur.execute("""
-                INSERT OR REPLACE INTO articles
+                INSERT INTO articles
                 (link, paper, keyword, title, article_date, area_hint, raw_address_extracted, content_hash,
                  relevance_score, relevance_keywords)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(link) DO UPDATE SET
+                    paper = excluded.paper, keyword = excluded.keyword, title = excluded.title,
+                    article_date = excluded.article_date, area_hint = excluded.area_hint,
+                    raw_address_extracted = excluded.raw_address_extracted, content_hash = excluded.content_hash,
+                    relevance_score = excluded.relevance_score, relevance_keywords = excluded.relevance_keywords
             """, (
                 link,
                 article.get("paper", ""),

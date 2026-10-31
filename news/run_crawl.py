@@ -47,7 +47,7 @@ PART_GROUPS = {
                 "아산투데이", "당진시대", "서산타임즈", "공주신문", "금산신문", "홍성신문", "계룡일보", "보령뉴스",
                 "뉴스서천", "청양신문", "태안신문", "논산포커스"],
         "충북": ["충청일보", "충북일보", "중부매일", "동양일보", "충주신문", "제천단양뉴스", "옥천신문", "보은사람들",
-                "주간영동", "음성신문", "괴산타임즈"],
+                "주간영동", "음성타임즈", "괴산타임즈"],
     },
     "전라·광주": {
         "전북": ["전북일보", "전북도민일보", "전주일보", "익산신문", "정읍신문", "무주신문", "부안독립신문"],
@@ -67,7 +67,7 @@ DEFAULT_BLACKLIST_KEYWORDS = [
     "행사", "사설",
 ]
 
-SEARCH_PERIOD_DAYS = 15      # 최근 N일 이내 기사만 수집
+SEARCH_PERIOD_DAYS = 20      # 최근 N일 이내 기사만 수집 (실제 실행 20일. 시험 테스트는 --days 365 로 1년치를 본다)
 MAX_OLD_IN_A_ROW = 3         # 기간보다 오래된 기사가 연속 N건이면 다음 키워드로
 MAX_PAGES_PER_KEYWORD = 30   # 안전장치
 HEADLESS = False             # True면 브라우저 창 없이 실행 (Selenium 사용 신문사만 해당)
@@ -119,6 +119,9 @@ def main():
     parser.add_argument("--headless", action="store_true", help="브라우저 창 없이 실행")
     parser.add_argument("--workers", type=int, default=8, help="requests 방식 신문사 동시 수집 개수 (1=순차, 기본 8)")
     parser.add_argument("--min-score", type=int, default=0, help="보상 관련도 최소 점수 (0=기본값 사용)")
+    parser.add_argument("--time-budget-min", type=float, default=0.0,
+                        help="수집에 쓸 최대 시간(분). 넘으면 수집을 멈추고 지금까지의 결과로 정제·PNU 단계를 진행 (0=제한 없음). "
+                             "GitHub Actions 처럼 작업 제한시간이 있는 곳에서는 제한시간보다 20~30분 짧게 준다")
     parser.add_argument("--out", default="", help="결과 저장 폴더 (기본: 환경변수 NEWS_SAVE_DIR 또는 output\\)")
     parser.add_argument("--pnu", action="store_true", help="수집 완료 후 자동으로 주소 완성 및 PNU 발급(SQLite 저장)")
     args, _ = parser.parse_known_args()   # IDE에서 낯선 인자가 붙어도 무시
@@ -212,6 +215,7 @@ def main():
         headless=HEADLESS or args.headless,
         workers=args.workers,
         min_score=args.min_score,
+        time_budget_min=args.time_budget_min,
     )
     crawler = Crawler(settings)
     try:

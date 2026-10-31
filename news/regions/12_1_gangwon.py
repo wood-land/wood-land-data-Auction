@@ -202,6 +202,8 @@ SITES = [
         link_contains="",
         fetch="selenium",
         note='2026-09-25 live check: keyword search returned 20 items and the impossible control returned 0; list, date, and body selectors matched. Earlier no-filter observation should be monitored.',
+        enabled=False,
+        disabled_reason="수집 제외 (2026-10-31 사용자 지시). 운영에서 3회 연속 전체 키워드 0건이었다.",
     ),
 
     # 삼척동해신문 (sdnews.co.kr / m.sdnews.co.kr) - 12_116 삼척동해신문 0511.py 를 이식

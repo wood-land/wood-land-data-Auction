@@ -251,8 +251,9 @@ SITES = [
         homepage_url="https://www.yeongnam.com",
         default_area="대구·경북",
         fetch="selenium",
-        enabled=True,
+        enabled=False,
         note="대구·경북 최고(最古) 일간지. 연합뉴스 OpenAPI 비동기 렌더링 Selenium 실측 통과",
+        disabled_reason="수집 제외 (2026-10-31 사용자 지시). 검색 결과가 연합뉴스 Open API(페이지에 심어진 접근 토큰)로 자바스크립트가 채워지고 page= 파라미터가 무시되어 키워드마다 첫 화면만 읽힌다. 기사 날짜 선택자(li.article-bottom-input)는 정확하다.",
     ),
     Site(
         name="경북매일",

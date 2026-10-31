@@ -112,3 +112,59 @@ def test_hamannews_icon_between_label_and_date():
     info = '<strong class="if_date"><span class="sound_only">작성일</span><i class="fa fa-clock-o" aria-hidden="true"></i> 2026-07-27 17:32</strong>'
     art = parse_article(f"<html><body>{info}{BODY}</body></html>", site("strong.if_date"))
     assert (art["input_date"], art["date_source"]) == ("2026-07-27", "선택자(라벨)")
+
+
+def test_double_escaped_title_entities_are_decoded():
+    from common.crawler_core import parse_list
+    html = "<ul><li class='it'><a href='/a/1'>밀양강 &amp;apos;초대형 파크골프장&amp;apos; 조성</a></li></ul>"
+    s = Site(name="t", search_url="u", list_item_sel="li.it", list_title_sel="a", list_date_sel="", article_date_sel="x",
+             article_body_sel="b", link_contains="/a/")
+    assert parse_list(html, "http://t/", s)[0]["title"] == "밀양강 '초대형 파크골프장' 조성"
+
+
+# ---- 신문사마다 다른 '신문게시일' 표현 / 기준 날짜 정책 ----
+from common.crawler_core import pick_reference_date
+
+
+def test_publication_date_labels_used_by_different_papers():
+    assert parse_article_dates_ex("승인 2026.07.08 21:30")[:3] == ("2026-07-08", None, True)                  # 음성타임즈
+    assert parse_article_dates_ex("기사입력  2026/05/12 [10:42]")[:3] == ("2026-05-12", None, True)           # 충주신문
+    assert parse_article_dates_ex("입력 2026.10.29 20:50")[:3] == ("2026-10-29", None, True)                  # 대구신문
+    assert parse_article_dates_ex("송고 2026-10-01 09:00")[2] is True
+    assert parse_article_dates_ex("최초등록 2026-10-01")[2] is True
+
+
+def test_modified_label_variants():
+    assert parse_article_dates_ex("입력 2026.09.28 19:10 수정 2026.09.29 19:59")[:2] == ("2026-09-28", "2026-09-29")
+    assert parse_article_dates_ex("입력 2026.09.28 최종수정 2026.09.30")[1] == "2026-09-30"
+    assert parse_article_dates_ex("입력 2026.09.28 수정일 2026.10.01")[1] == "2026-10-01"
+    assert parse_article_dates_ex("등록 2026.09.28 업데이트 2026.10.02")[1] == "2026-10-02"
+
+
+def test_reference_date_policy():
+    assert pick_reference_date("2026-09-28", "2026-09-29") == ("2026-09-29", "수정")                    # 기본: 수정일 우선 (경남일보)
+    assert pick_reference_date("2026-09-28", None) == ("2026-09-28", "입력")
+    assert pick_reference_date("2026-09-28", "2026-09-29", "input") == ("2026-09-28", "입력")           # 입력일만 (대구신문)
+    assert pick_reference_date(None, "2026-09-29", "input") == ("2026-09-29", "수정")                   # 입력일을 못 읽은 때만 수정일
+    assert pick_reference_date(None, None, "input") == (None, None)
+
+
+def test_estimes_approval_date_element():
+    ul = ('<ul><li class="name">음성타임즈</li><li class="date">승인 2026.07.08 21:30</li><li class="reply">댓글 0</li></ul>')
+    art = parse_article(f"<html><body>{ul}{BODY}</body></html>", site("li.date"))
+    assert (art["input_date"], art["date_source"]) == ("2026-07-08", "선택자(라벨)")
+
+
+def test_cjwn_writer_time_with_email_icon_noise():
+    div = ('<div class="writer_time"><span class="writer">충주신문</span> <span class="email_icon"><a href="x"><img alt="메일"></a></span> '
+           '<span class="btw">|</span> 기사입력  2026/05/12 [10:42] </div>')
+    art = parse_article(f"<html><body>{div}{BODY}</body></html>", site("div.writer_time"))
+    assert art["input_date"] == "2026-05-12"
+
+
+def test_gnnews_input_and_modified_both_read():
+    ul = ('<ul class="article-info no-bullet"><li class="name">문병기</li><li>입력 2026.09.28 19:10</li>'
+          '<li class="m-none">수정 2026.09.29 19:59</li><li class="m-none">댓글 0</li></ul>')
+    art = parse_article(f"<html><body>{ul}{BODY}</body></html>", site("ul.article-info.no-bullet"))
+    assert (art["input_date"], art["modified_date"]) == ("2026-09-28", "2026-09-29")
+    assert pick_reference_date(art["input_date"], art["modified_date"]) == ("2026-09-29", "수정")      # 경남일보: 수정일 기준

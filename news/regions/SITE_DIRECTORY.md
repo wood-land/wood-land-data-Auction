@@ -70,7 +70,8 @@
 | 태안신문 | [taeannews.co.kr](http://www.taeannews.co.kr) | 충남 태안군 대표 (활성) |
 | 옥천신문 | [okinews.com](http://www.okinews.com) | 충북 옥천군 대표 (활성) |
 | 보은사람들 | [boeunpeople.com](http://www.boeunpeople.com) | 충북 보은군 대표 (활성) |
-| 음성신문 | [usnews.co.kr](http://www.usnews.co.kr) | 충북 음성군 대표 (활성) |
+| 음성신문 | [usnews.co.kr](http://www.usnews.co.kr) | 충북 음성군 (제외 — 음성타임즈로 교체) |
+| 음성타임즈 | [estimes.co.kr](http://www.estimes.co.kr) | 충북 음성군 (활성, EUC-KR) |
 | 제천단양뉴스 | [jdnews.kr](http://www.jdnews.kr) | 충북 제천·단양 대표 (활성) |
 
 ## 12_5 경북·대구·울산권

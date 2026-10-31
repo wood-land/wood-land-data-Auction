@@ -14,6 +14,13 @@ from crawler_core import TEMPLATE_ARTICLEVIEW, Site, site_from
 REGION_NAME = "충청·대전·세종"
 
 
+def _disabled(site: Site, reason: str) -> Site:
+    """이미 만든 신문사 설정을 수집 제외로 돌린다 (정의는 남겨 둬서 나중에 다시 켤 수 있게)."""
+    site.enabled = False
+    site.disabled_reason = reason
+    return site
+
+
 def _ndsoft_verified(name: str, area: str, base_url: str,
                      list_item_sel: str = "#section-list li",
                      list_title_sel: str = "h4.titles a, h2.titles a, div.list-titles a, h2.altlist-subject a",
@@ -337,11 +344,33 @@ SITES = [
         enabled=True,
         note="충북 영동군 대표 지역신문. NDSoft GET sc_word 20건 실측 통과",
     ),
-    _ndsoft_verified("음성신문", "음성군", "http://www.usnews.co.kr",
-                     list_item_sel="ul.types li",
-                     list_title_sel="h2.titles a, h4.titles a",
-                     article_date_sel="div.user-intro, ul.infomation, ul.info",
-                     note="충북 음성군 대표 지역신문. NDSoft types 20건 실측"),
+    # 음성신문(usnews.co.kr)은 제외하고 음성타임즈로 교체 (2026-10-31 사용자 지시)
+    _disabled(_ndsoft_verified("음성신문", "음성군", "http://www.usnews.co.kr",
+                               list_item_sel="ul.types li",
+                               list_title_sel="h2.titles a, h4.titles a",
+                               article_date_sel="div.user-intro, ul.infomation, ul.info",
+                               note="충북 음성군 대표 지역신문. NDSoft types 20건 실측"),
+              "음성타임즈(estimes.co.kr)로 교체"),
+    # 음성타임즈 (estimes.co.kr) - 2026-10-31 실측
+    # 사이트가 EUC-KR 이다: 검색어를 UTF-8 로 보내면 '전체 0건'이 되고 홈 화면 기사 19건만 돌아온다(키워드와 무관).
+    # EUC-KR 로 보내면 '보상' 449건. 목록은 기사 1건 = table 1개(td.list-titles / td.list-summary / td.list-times).
+    # 기사 날짜는 <li class="date">승인 2026.07.08 21:30</li> (승인 = 기사 게시일).
+    Site(
+        name="음성타임즈",
+        search_url="http://www.estimes.co.kr/news/articleList.html?sc_area=A&view_type=sm&sc_word={kw}&page={page}",
+        encoding="euc-kr",
+        list_item_sel="table:has(td.list-titles):not(:has(table td.list-titles))",
+        list_title_sel="td.list-titles a",
+        list_date_sel="td.list-times",
+        article_date_sel="li.date",
+        article_body_sel="#articleBody",
+        link_contains="articleView.html",
+        homepage_url="http://www.estimes.co.kr",
+        default_area="음성군",
+        fetch="requests",
+        enabled=True,
+        note="충북 음성군 지역신문. EUC-KR GET 검색 '보상' 449건 실측",
+    ),
 
     # ══════════════════════════════════════════════════════════════════
     # ── 4. 실측 검증 완료 신규 활성화 매체 (3곳 전원 활성화) ──

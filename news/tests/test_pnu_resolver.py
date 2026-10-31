@@ -284,3 +284,25 @@ def test_repair_removes_row_duplicating_same_pnu_in_same_article(tmp_path):
     assert stats["duplicates_removed"] == 1
     with sqlite3.connect(r.db_path) as c:
         assert c.execute("SELECT COUNT(*) FROM article_addresses").fetchone()[0] == 1
+
+
+# ---------------- 기사 재저장 ----------------
+def _article(**kw):
+    a = {"link": "http://x/1", "paper": "p", "keyword": "k", "title": "제목", "date": "2026-10-20", "area": "영주시",
+         "address_extracted": "a", "body": "본문 " * 20}
+    a.update(kw)
+    return a
+
+
+def test_resaving_an_article_keeps_id_and_first_collected_time(tmp_path):
+    r = make(tmp_path, fake_kakao_factory({}))
+    r.save_article_and_addresses(_article(), [])
+    with sqlite3.connect(r.db_path) as c:
+        c.execute("UPDATE articles SET created_at = '2026-10-01 00:00:00'")
+        c.commit()
+        first_id = c.execute("SELECT id FROM articles").fetchone()[0]
+    r.save_article_and_addresses(_article(date="2026-10-22", title="바뀐 제목"), [])
+    with sqlite3.connect(r.db_path) as c:
+        row = c.execute("SELECT id, created_at, article_date, title FROM articles").fetchone()
+        assert c.execute("SELECT COUNT(*) FROM articles").fetchone()[0] == 1
+    assert row == (first_id, "2026-10-01 00:00:00", "2026-10-22", "바뀐 제목")   # 최초 수집 시각 유지, 내용은 갱신

@@ -22,6 +22,7 @@ v3에서 달라진 점
 """
 from __future__ import annotations
 
+import html as html_lib
 import os
 import random
 import re
@@ -38,6 +39,9 @@ import pandas as pd
 from bs4 import BeautifulSoup
 
 from common.admin_names import NON_PLACE_DONGRI, is_place_eupmyeon, peel_sigungu_suffix
+from common.search_adapters import ADAPTERS as SEARCH_ADAPTERS
+from common.search_builders import BUILDERS as SEARCH_BUILDERS
+from common.verified_selectors import VERIFIED_SELECTORS
 
 # ============================ 지번 주소 추출 ============================
 # 패턴: (읍/면 이름)? + (동/리 지명 | 'N가' 지명) + (산)?번지수(-번지수)? + (번지)?
@@ -119,8 +123,9 @@ def extract_addresses(text: Optional[str]) -> List[str]:
 
 # ============================ 날짜 처리 ============================
 _D = r"(\d{2,4})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})일?"
-_INPUT_RES = [re.compile(r"(?:입력|발행일)\s*:?\s*" + _D), re.compile(r"(?:승인|등록|작성)일?\s*:?\s*" + _D)]   # '등록일', '작성일' 도 라벨
-_MODIFIED_RE = re.compile(r"(?:수정|최종편집)\s*:?\s*" + _D)
+# 신문사마다 '신문게시일' 표현이 다르다: 입력, 기사입력, 승인(일), 등록(일), 작성(일), 송고, 발행일 -> 입력일 / 수정(일), 최종수정, 최종편집 -> 수정일
+_INPUT_RES = [re.compile(r"(?:입력|발행일)\s*:?\s*" + _D), re.compile(r"(?:승인|등록|작성|송고)일?\s*:?\s*" + _D)]
+_MODIFIED_RE = re.compile(r"(?:최종수정|최종편집|수정|업데이트)일?\s*:?\s*" + _D)
 _ANY_DATE_RE = re.compile(_D)
 
 
@@ -153,14 +158,35 @@ def parse_article_dates_ex(date_info_text: Optional[str]) -> Tuple[Optional[str]
     return ins, (_fmt(mod) if mod else None), labeled
 
 
+# 날짜 요소의 텍스트가 이보다 길면 '페이지 전체를 감싼 요소'를 잡은 것이다. 그 안에서 처음 나온 날짜는 사이드바의
+# 다른 기사나 머리말의 시각일 뿐 기사 날짜가 아니다 (선택자를 'td, span, div'로 넓게 잡은 신문사에서 발생).
+MAX_DATE_ELEMENT_TEXT = 300
+
+
+def date_from_element(el) -> Tuple[Optional[str], Optional[str], bool]:
+    """선택자로 잡은 요소 -> (입력일, 수정일, 라벨 여부). 요소가 너무 크면 (None, None, False)."""
+    if el is None:
+        return None, None, False
+    text = el.get("content") or el.get("datetime") or el.get_text(" ")
+    if len(text) > MAX_DATE_ELEMENT_TEXT:
+        return None, None, False
+    return parse_article_dates_ex(text)
+
+
 def parse_article_dates(date_info_text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     """(입력일, 수정일). 라벨 여부가 필요하면 parse_article_dates_ex 를 쓴다."""
     ins, mod, _ = parse_article_dates_ex(date_info_text)
     return ins, mod
 
 
-def pick_reference_date(input_date, modified_date):
-    """수정일이 있으면 수정일, 없으면 입력일. → (날짜문자열, '수정'|'입력') / 둘 다 없으면 (None, None)"""
+def pick_reference_date(input_date, modified_date, basis: str = "modified_first"):
+    """기사의 기준 날짜 -> (날짜문자열, '수정'|'입력') / 둘 다 없으면 (None, None)
+    basis  "modified_first"(기본): 수정일이 있으면 수정일, 없으면 입력일 (예: 경남일보)
+           "input"             : 입력일(입력/기사입력/승인/등록)만 쓴다. 입력일을 못 읽었을 때만 수정일 (예: 대구신문)"""
+    if basis == "input":
+        if input_date:
+            return input_date, "입력"
+        return (modified_date, "수정") if modified_date else (None, None)
     if modified_date:
         return modified_date, "수정"
     if input_date:
@@ -204,6 +230,19 @@ class Site:
     homepage_url: str = ""       # Newspaper homepage, separate from its search endpoint.
     enabled: bool = True
     disabled_reason: str = ""
+    search_adapter: str = ""     # 검색 결과를 JSON API 로 받는 사이트 (common/search_adapters.py 의 이름). JSON -> 목록 HTML 로 바꿔 준다
+    list_title_text_sel: str = ""    # 목록의 링크가 카드 전체를 감싸 링크 텍스트에 요약·날짜까지 섞일 때, 항목 안에서 제목만 담은 요소 (예: 칠곡신문 div.news_tit)
+    search_encoding: str = ""    # 검색어를 퍼센트 인코딩할 때의 문자셋 (search_builder 가 쓴다). 기사 페이지 디코딩용 encoding 과 별개다
+    search_builder: str = ""     # 검색 주소를 코드로 만들어야 하는 사이트 (common/search_builders.py 의 이름). 비우면 search_url 템플릿을 쓴다
+    date_basis: str = "modified_first"   # 기준 날짜: "modified_first"(수정일 우선) | "input"(입력일만). pick_reference_date 참고
+    newest_first: bool = True    # 검색 결과가 최신순인가. False 면 '오래된 기사 N건 연속이면 종료' 규칙을 쓰지 않는다
+                                 # (최신순이 아니면 오래된 기사 뒤에 최근 기사가 있어도 놓치게 된다)
+
+    def __post_init__(self):
+        # diagnose_dates.py 로 기사를 실제로 열어 정답 날짜와 대조해 확인한 선택자가 있으면 그것을 쓴다
+        # (common/verified_selectors.py). 신문사 정의마다 흩어져 있던 넓은 선택자('td, span, div' 등)를 한 곳에서 바로잡는다.
+        for key, value in VERIFIED_SELECTORS.get(self.name, {}).items():
+            setattr(self, key, value)
 
 
 def site_from(template: dict, **overrides) -> Site:
@@ -227,13 +266,18 @@ class Settings:
     keywords: List[str]
     blacklist_keywords: Tuple[str, ...] = ("행사", "사설")
     exclude_title_keywords: Tuple[str, ...] = ("[포토뉴스]", "[동정]", "[의정소식]")
-    search_period_days: int = 15       # 최근 N일 이내 기사만 수집
+    search_period_days: int = 20       # 최근 N일 이내 기사만 수집
     max_old_in_a_row: int = 3          # 기간보다 오래된 기사가 연속 N건이면 다음 키워드로
     max_pages_per_keyword: int = 30    # 안전장치
     headless: bool = False             # True면 브라우저 창 없이 실행 (Selenium 사용 시)
     workers: int = 8                   # requests 방식 신문사를 동시에 수집할 개수 (1이면 순차)
     min_score: int = 0                 # 0이면 relevance.MIN_SCORE 사용
     today: Optional[datetime] = None   # 테스트용 (None이면 현재 시각)
+    max_stale_pages: int = 3           # 최신순이 아닌 신문사: 최근 기사가 한 건도 없는 페이지가 연속 N쪽이면 키워드 종료
+    max_pages_unsorted_no_list: int = 5   # 위와 같되 목록에서 날짜를 못 읽는 신문사(기사를 열어 봐야 날짜를 앎)
+    max_pages_unsorted: int = 8        # 최신순이 아닌 신문사의 키워드당 최대 페이지 (기사를 열어 봐야 날짜를 아는 곳이 많아 비용이 크다)
+    time_budget_min: float = 0.0       # 0이 아니면 이 시간(분)이 지나면 수집을 멈추고 지금까지의 결과로 마무리한다.
+                                       # (GitHub Actions 작업 제한시간에 걸려 취소되면 PNU 단계가 못 돌아 결과가 통째로 사라진다)
 
 
 CSV_COLUMNS = ["신문사", "검색어", "제목", "링크", "날짜", "날짜기준", "지번포함여부", "지역힌트", "주소추출", "보상점수", "보상키워드", "본문"]
@@ -254,15 +298,26 @@ def parse_list(html: str, page_url: str, site: Site) -> List[dict]:
     clean_popup_elements(soup)
     items = []
     for block in soup.select(site.list_item_sel):
-        a = block.select_one(site.list_title_sel)
-        if a is None or not a.get("href"):
+        # 같은 기사로 가는 링크가 여러 개일 수 있다(썸네일 이미지 링크 + 제목 링크). 이미지만 있는 링크가 먼저 잡히면 제목이
+        # 통째로 비므로(남도일보·전남일보는 목록 20건 전부), 글자가 있는 링크를 우선하고 없으면 이미지 alt 를 쓴다.
+        anchors = [x for x in block.select(site.list_title_sel) if x.get("href")]
+        if not anchors:
             continue
+        a = next((x for x in anchors if x.get_text(strip=True)), anchors[0])
         link = urljoin(page_url, a["href"].strip())
         if site.link_contains and site.link_contains not in link:
             continue
+        title_text = a.get_text()
+        if site.list_title_text_sel:
+            te = block.select_one(site.list_title_text_sel)
+            if te is not None and te.get_text(strip=True):
+                title_text = te.get_text()
+        if not title_text.strip():
+            img = a.find("img")
+            title_text = (img.get("alt") or "") if img is not None else ""
         date_el = block.select_one(site.list_date_sel) if site.list_date_sel else None
         items.append({
-            "title": " ".join(a.get_text().split()),
+            "title": " ".join(html_lib.unescape(title_text).split()),      # 사이트가 &amp;apos; 처럼 두 번 이스케이프한 제목 대응
             "link": link,
             "list_date": date_el.get_text(" ", strip=True) if date_el is not None else "",
         })
@@ -331,9 +386,7 @@ def parse_article(html: str, site: Site) -> dict:
     soup = BeautifulSoup(html or "", "html.parser")
     clean_popup_elements(soup)
     date_el = soup.select_one(site.article_date_sel)
-    date_text = (date_el.get("content") or date_el.get("datetime") or
-                 date_el.get_text(" ")) if date_el is not None else ""
-    input_date, modified_date, labeled = parse_article_dates_ex(date_text)
+    input_date, modified_date, labeled = date_from_element(date_el)
     meta_in, meta_mod = _meta_dates(soup, html)
 
     date_source = "선택자(라벨)" if (input_date and labeled) else ""
@@ -367,7 +420,11 @@ def parse_article(html: str, site: Site) -> dict:
         v = _meta_content(soup, name)
         if v and v not in parts:
             parts.append(v)
-    return {"input_date": input_date, "modified_date": modified_date,
+    title = _meta_content(soup, "og:title") or _meta_content(soup, "twitter:title")
+    if not title:
+        h = soup.find(["h1", "h2"])
+        title = h.get_text(" ", strip=True) if h is not None else (soup.title.get_text(" ", strip=True) if soup.title else "")
+    return {"input_date": input_date, "modified_date": modified_date, "title": " ".join(html_lib.unescape(title).split()),
             "body": body, "area": " ".join(parts), "has_date_el": date_el is not None,
             "has_body_el": (body != "(본문 추출 실패)"),
             "date_source": date_source, "date_conflict": date_conflict}
@@ -546,6 +603,28 @@ class RequestsFetcher:
             r.encoding = r.apparent_encoding
         return r.text
 
+    def get_raw(self, url: str, headers: Optional[dict] = None, timeout: int = 15) -> bytes:
+        """GET 후 응답 본문을 바이트 그대로 돌려준다 (JSON API 용)."""
+        import requests
+        try:
+            r = self.session.get(url, headers=headers or {}, timeout=max(timeout, 15))
+        except requests.RequestException as e:
+            raise FetchError(e.__class__.__name__) from e
+        if r.status_code >= 400:
+            raise FetchError(f"HTTP {r.status_code}")
+        return r.content
+
+    def post_raw(self, url: str, data: dict, headers: Optional[dict] = None, timeout: int = 15) -> bytes:
+        """POST 후 응답 본문을 바이트 그대로 돌려준다 (JSON API 처럼 응답 헤더의 문자셋이 틀린 경우 직접 해독하려고)."""
+        import requests
+        try:
+            r = self.session.post(url, data=data, headers=headers or {}, timeout=max(timeout, 15))
+        except requests.RequestException as e:
+            raise FetchError(e.__class__.__name__) from e
+        if r.status_code >= 400:
+            raise FetchError(f"HTTP {r.status_code}")
+        return r.content
+
     def post(self, url: str, data: dict, timeout: int = 15, encoding: str = "") -> str:
         import requests
         try:
@@ -577,7 +656,8 @@ class SiteStats:
     irrelevant_skipped: int = 0
     errors: int = 0
     failed: str = ""
-    seconds: float = 0.0       # 이 신문사에 쓴 시간(초). 구글시트 수집로그용
+    seconds: float = 0.0          # 이 신문사에 쓴 시간(초). 구글시트 수집로그용
+    timed_out: bool = False       # 시간 예산을 다 써서 일부 키워드/페이지를 못 돌았다
 
 
 class Crawler:
@@ -591,6 +671,12 @@ class Crawler:
         self._tls = threading.local()          # 병렬 수집 시 스레드마다 별도 fetcher
         self._all_fetchers: List[object] = []
         self._lock = threading.Lock()
+        self._now = time.time                  # 테스트에서 가짜 시계를 넣을 수 있다
+        self.deadline: Optional[float] = (self._now() + settings.time_budget_min * 60) if settings.time_budget_min else None
+
+    def expired(self) -> bool:
+        """시간 예산을 다 썼는가."""
+        return self.deadline is not None and self._now() >= self.deadline
 
     def _default_factory(self, kind: str):
         if kind == "selenium":
@@ -614,6 +700,11 @@ class Crawler:
                           timeout: int = 10, strict: bool = False):
         """Fetch a configured GET search URL or submit a site's verified POST form."""
         f = fetcher or self.fetcher(site.fetch)
+        if site.search_adapter:
+            return SEARCH_ADAPTERS[site.search_adapter](site, keyword, page, f)
+        if site.search_builder:
+            url = SEARCH_BUILDERS[site.search_builder](site, keyword, page)
+            return url, f.get(url, wait_selector=site.list_item_sel, timeout=timeout, strict=strict, encoding=site.encoding)
         kw_enc = quote(keyword.encode(site.encoding)) if site.encoding else quote(keyword)
         url = site.search_url.format(kw=kw_enc, page=page)
         method = site.search_method.upper()
@@ -710,7 +801,7 @@ class Crawler:
             return False
         art = parse_article(ahtml, site)
         ok = True
-        ref, kind = pick_reference_date(art["input_date"], art["modified_date"])
+        ref, kind = pick_reference_date(art["input_date"], art["modified_date"], site.date_basis)
         print(f"  {'✔' if ref else '✘'} 기사 날짜: 입력 {art['input_date']} / 수정 {art['modified_date']} → 기준 {ref}({kind}) [출처: {art['date_source'] or '없음'}]")
         if art["date_conflict"]:
             print(f"  ⚠ {art['date_conflict']} → article_date_sel 이 기사 날짜가 아닌 요소(머리말 시계 등)를 잡고 있다. 메타 날짜를 대신 사용했지만 선택자를 좁히는 것이 좋다.")
@@ -786,6 +877,10 @@ class RegionRun:
     def _collect_site_keywords(self, site: Site, stats: SiteStats):
         st = self.c.st
         for idx, keyword in enumerate(st.keywords, start=1):
+            if self.c.expired():
+                stats.timed_out = True
+                print(f"\n[{site.name}] 시간 예산({st.time_budget_min:g}분)을 다 써서 남은 키워드는 건너뜁니다")
+                return
             print(f"\n[{site.name}] ({idx}/{len(st.keywords)}) 검색어 '{keyword}' 검색 중...")
             try:
                 self.collect_keyword(site, keyword, stats)
@@ -798,12 +893,21 @@ class RegionRun:
         """키워드 1개 수집. 기간 밖 기사가 max_old_in_a_row건 연속이면 종료."""
         st = self.c.st
         fetcher = self.c.fetcher(site.fetch)
-        max_pages = site.max_pages or st.max_pages_per_keyword
+        # 최신순이 아니면 끝까지 훑을 수밖에 없다. 목록 날짜를 읽을 수 있으면 오래된 기사를 열지 않고 건너뛰어 싸므로 상한을 넉넉히,
+        # 못 읽으면 기사를 열어 봐야 날짜를 알아 비용이 크므로 상한을 줄인다.
+        unsorted_cap = st.max_pages_unsorted if site.list_date_sel else min(st.max_pages_unsorted, st.max_pages_unsorted_no_list)
+        max_pages = site.max_pages or (st.max_pages_per_keyword if site.newest_first
+                                       else min(st.max_pages_per_keyword, unsorted_cap))
+        stop_on_old = site.newest_first
+        stale_pages = 0
         old_in_a_row = 0
         prev_links = None
         stats.keywords_total += 1
 
         for page in range(1, max_pages + 1):
+            if self.c.expired():
+                stats.timed_out = True
+                return
             url, html = self.c.fetch_search_page(site, keyword, page, fetcher,
                                                  timeout=10, strict=False)
             items = parse_list(html, url, site)
@@ -819,7 +923,11 @@ class RegionRun:
                 return
             prev_links = links
 
+            recent_on_page = False
             for item in items:
+                if self.c.expired():
+                    stats.timed_out = True
+                    return
                 link, title = item["link"], item["title"]
                 list_date = parse_list_date(item["list_date"])
 
@@ -840,9 +948,10 @@ class RegionRun:
                     ref_date, _ = self.seen[link]
                     if is_recent(ref_date, self.start_date):
                         old_in_a_row = 0
+                        recent_on_page = True
                     else:
                         old_in_a_row += 1
-                        if old_in_a_row >= st.max_old_in_a_row:
+                        if stop_on_old and old_in_a_row >= st.max_old_in_a_row:
                             print(f"  → 오래된 기사 {st.max_old_in_a_row}건 연속, 다음 키워드로")
                             return
                     continue
@@ -854,7 +963,7 @@ class RegionRun:
                     self._remember(link, list_date, "목록")
                     old_in_a_row += 1
                     print(f"  → 기간 밖(목록 {list_date}) {title[:30]} ({old_in_a_row}/{st.max_old_in_a_row})")
-                    if old_in_a_row >= st.max_old_in_a_row:
+                    if stop_on_old and old_in_a_row >= st.max_old_in_a_row:
                         print(f"  → 오래된 기사 {st.max_old_in_a_row}건 연속, 다음 키워드로")
                         return
                     continue
@@ -871,7 +980,18 @@ class RegionRun:
                 stats.opened += 1
 
                 art = parse_article(ahtml, site)
-                ref_date, ref_kind = pick_reference_date(art["input_date"], art["modified_date"])
+                if not title.strip() and art.get("title"):
+                    title = art["title"]                        # 목록에서 제목을 못 읽은 기사: 기사 페이지의 제목을 쓴다
+                    if any(kw in title for kw in st.exclude_title_keywords):
+                        self._remember(link, list_date or datetime.now().strftime("%Y-%m-%d"), "제외(제목)")
+                        continue
+                    bl = [b for b in st.blacklist_keywords if b in title]
+                    if bl:
+                        self._remember(link, list_date or datetime.now().strftime("%Y-%m-%d"), "블랙리스트(제목)")
+                        stats.blacklist_skipped += 1
+                        print(f"  → 블랙리스트 제외(제목 '{bl[0]}'): {title[:35]}")
+                        continue
+                ref_date, ref_kind = pick_reference_date(art["input_date"], art["modified_date"], site.date_basis)
                 if not ref_date:   # 기사 페이지에서 못 읽으면 목록 날짜로 대체
                     ref_date, ref_kind = list_date, "목록"
                 if not ref_date:
@@ -890,6 +1010,7 @@ class RegionRun:
 
                 if is_recent(ref_date, self.start_date):
                     old_in_a_row = 0
+                    recent_on_page = True
                     addresses = extract_addresses(full_text)
                     if addresses:
                         related, score, hit_words = is_compensation_related(title, art["body"])
@@ -913,9 +1034,15 @@ class RegionRun:
                 else:
                     old_in_a_row += 1
                     print(f"  → 기간 밖 [{ref_kind} {ref_date}] {title[:30]} ({old_in_a_row}/{st.max_old_in_a_row})")
-                    if old_in_a_row >= st.max_old_in_a_row:
+                    if stop_on_old and old_in_a_row >= st.max_old_in_a_row:
                         print(f"  → 오래된 기사 {st.max_old_in_a_row}건 연속, 다음 키워드로")
                         return
+
+            if not site.newest_first:
+                stale_pages = 0 if recent_on_page else stale_pages + 1
+                if stale_pages >= st.max_stale_pages:
+                    print(f"  → 최근 기사가 없는 페이지 {stale_pages}쪽 연속, 다음 키워드로")
+                    return
 
             self.c.pause(site.delay_page, site)
 
@@ -931,4 +1058,6 @@ class RegionRun:
                 print(f"    ⚠ {s.name}: 모든 키워드에서 검색 결과가 0건 → 검색 URL/선택자 점검 필요 (--check)")
             if s.failed:
                 print(f"    ⚠ 마지막 오류: {s.failed}")
+            if s.timed_out:
+                print(f"    ⚠ {s.name}: 시간 예산을 다 써서 일부만 수집했습니다 (이미 확인한 기사는 .seen.tsv 에 남아, 같은 폴더에서 다시 실행하면 이어서 수집)")
         print(f"\n✅ 저장 완료: {self.csv_path}")
