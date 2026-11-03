@@ -231,6 +231,8 @@ class Site:
     enabled: bool = True
     disabled_reason: str = ""
     search_adapter: str = ""     # 검색 결과를 JSON API 로 받는 사이트 (common/search_adapters.py 의 이름). JSON -> 목록 HTML 로 바꿔 준다
+    list_item_parent: str = ""   # 항목을 담은 칸(list_item_sel)에서 위로 올라가 찾을 부모 태그 (예: 'table'). 항목 1건이 여러 행/칸에 걸친 표 레이아웃에서
+                                 # ':has()' 로 표를 고르는 대신 쓴다 — 최신 soupsieve(러너)는 ':not(:has(..))' 같은 복합 선택자를 거부한다
     list_title_text_sel: str = ""    # 목록의 링크가 카드 전체를 감싸 링크 텍스트에 요약·날짜까지 섞일 때, 항목 안에서 제목만 담은 요소 (예: 칠곡신문 div.news_tit)
     search_encoding: str = ""    # 검색어를 퍼센트 인코딩할 때의 문자셋 (search_builder 가 쓴다). 기사 페이지 디코딩용 encoding 과 별개다
     search_builder: str = ""     # 검색 주소를 코드로 만들어야 하는 사이트 (common/search_builders.py 의 이름). 비우면 search_url 템플릿을 쓴다
@@ -297,7 +299,13 @@ def parse_list(html: str, page_url: str, site: Site) -> List[dict]:
     soup = BeautifulSoup(html or "", "html.parser")
     clean_popup_elements(soup)
     items = []
+    seen_blocks = set()
     for block in soup.select(site.list_item_sel):
+        if site.list_item_parent:
+            block = block.find_parent(site.list_item_parent) or block
+            if id(block) in seen_blocks:
+                continue
+            seen_blocks.add(id(block))
         # 같은 기사로 가는 링크가 여러 개일 수 있다(썸네일 이미지 링크 + 제목 링크). 이미지만 있는 링크가 먼저 잡히면 제목이
         # 통째로 비므로(남도일보·전남일보는 목록 20건 전부), 글자가 있는 링크를 우선하고 없으면 이미지 alt 를 쓴다.
         anchors = [x for x in block.select(site.list_title_sel) if x.get("href")]

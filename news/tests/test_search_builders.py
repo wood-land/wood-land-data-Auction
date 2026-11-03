@@ -64,7 +64,7 @@ WIDGET = '<div id="hot_issue_rolling"><span><a href="index_view_page.php?part_id
 
 def test_result_items_ignore_home_widgets_and_read_dates():
     for name, cls in (("익산신문", "f10_b"), ("경산신문", "title_S07")):
-        s = site(**{k: v for k, v in V[name].items() if k in ("list_item_sel", "list_title_sel", "list_date_sel")})
+        s = site(**{k: v for k, v in V[name].items() if k in ("list_item_sel", "list_title_sel", "list_date_sel", "list_item_parent")})
         page = f"<html><body>{WIDGET}<table><tr><td>{item(cls, 10, '결과 하나', '2026년 10월 15일')}{item(cls, 11, '결과 둘', '2026년 10월 14일')}</td></tr></table></body></html>"
         items = parse_list(page, "http://t/default/search_list.php", s)
         assert [i["title"] for i in items] == ["결과 하나", "결과 둘"], name         # 위젯 기사는 빠진다

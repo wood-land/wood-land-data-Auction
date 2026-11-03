@@ -359,7 +359,8 @@ SITES = [
         name="음성타임즈",
         search_url="http://www.estimes.co.kr/news/articleList.html?sc_area=A&view_type=sm&sc_word={kw}&page={page}",
         encoding="euc-kr",
-        list_item_sel="table:has(td.list-titles):not(:has(table td.list-titles))",
+        list_item_sel="td.list-titles",             # 항목 1건 = table 1개. ':has()' 대신 제목 칸에서 위로 table 을 찾는다(list_item_parent)
+        list_item_parent="table",
         list_title_sel="td.list-titles a",
         list_date_sel="td.list-times",
         article_date_sel="li.date",

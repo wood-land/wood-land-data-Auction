@@ -30,6 +30,8 @@ def test_registry_selectors_are_valid_css():
             if key.endswith("_sel") and key != "search_form_data":
                 if sel:                       # 빈 문자열은 '끔'
                     soup.select(sel)          # 잘못된 선택자면 예외
+            elif key == "list_item_parent":
+                assert isinstance(sel, str) and sel.isalpha(), (name, sel)
             elif key == "fetch":
                 assert sel in ("requests", "selenium"), (name, sel)
             elif key == "link_contains":
@@ -99,7 +101,7 @@ def test_date_from_element_size_limit():
 
 def test_registry_value_kinds():
     keys = {k for ov in VERIFIED_SELECTORS.values() for k in ov}
-    assert keys <= {"article_date_sel", "list_date_sel", "newest_first", "date_basis", "search_method", "search_url", "search_form_data", "search_builder", "search_encoding", "list_item_sel", "list_title_sel", "list_title_text_sel", "article_body_sel", "encoding", "search_adapter", "homepage_url", "fetch", "link_contains"}
+    assert keys <= {"article_date_sel", "list_date_sel", "newest_first", "date_basis", "search_method", "search_url", "search_form_data", "search_builder", "search_encoding", "list_item_sel", "list_title_sel", "list_title_text_sel", "article_body_sel", "encoding", "search_adapter", "homepage_url", "fetch", "link_contains", "list_item_parent"}
 
 
 def test_unsorted_flag_reaches_the_site_object():
