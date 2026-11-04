@@ -54,9 +54,9 @@ jobs:
               pick = inp
           elif os.environ["EVENT"] == "workflow_dispatch":   # 수동 실행 + 비움: 전체
               pick = ALL + list(WIDE)
-          else:                         # 스케줄: 지자체는 3일에 한 번(하루에 약 1/3씩), 전국1/전국2 는 5일에 한 번
+          else:                         # 스케줄: 지자체는 4일에 한 번(하루에 약 1/4씩, 수집 기간 7일이라 3일 겹침), 전국1/전국2 는 5일에 한 번
               day = datetime.date.today().toordinal()
-              pick = [r for i, r in enumerate(ALL) if (day + i) % 3 == 0]
+              pick = [r for i, r in enumerate(ALL) if (day + i) % 4 == 0]
               pick += [r for r, off in WIDE.items() if (day + off) % 5 == 0]
           print("regions=" + json.dumps(pick, ensure_ascii=False))
           PY
