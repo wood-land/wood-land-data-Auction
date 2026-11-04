@@ -2,7 +2,7 @@ name: news-crawl
 
 on:
   schedule:
-    - cron: "0 21 * * *"   # 매일 06:00 KST (UTC 21:00) - 하루에 한 단위씩, 9일에 한 바퀴
+    - cron: "0 21 * * *"   # 매일 06:00 KST (UTC 21:00) - 하루에 한 단위씩, 10일에 한 바퀴
   workflow_dispatch:
     inputs:
       region:
@@ -10,7 +10,7 @@ on:
         required: false
         default: ""
       days:
-        description: "최근 N일 (비우면 20일. 예약 실행은 단위당 9일에 한 번이라 20일이면 11일 겹쳐 놓친 기사를 다시 잡는다. 시험은 365)"
+        description: "최근 N일 (비우면 20일. 예약 실행은 단위당 10일에 한 번이라 20일이면 10일 겹쳐 놓친 기사를 다시 잡는다. 시험은 365)"
         required: false
         default: ""
 
@@ -38,7 +38,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           RUN_ID: ${{ github.run_id }}
           GH_TOKEN: ${{ github.token }}
-        # 9일에 한 바퀴: 하루에 한 단위씩(경기·인천은 제외). 단위 목록과 순환 규칙은 news/plan_units.py 에 있다.
+        # 10일에 한 바퀴: 하루에 한 단위씩(경기·인천은 8곳만). 단위 목록과 순환 규칙은 news/plan_units.py 에 있다.
         # 날짜로 고르지 않고 '지난번에 어디까지 돌았는지'로 고른다(성공이면 다음, 실패·취소면 한 번 더, 연속 2번 실패면 다음).
         run: python3 news/plan_units.py --event "$EVENT" --inputs "$INPUT_REGIONS" --run-id "$RUN_ID" >> "$GITHUB_OUTPUT"
 

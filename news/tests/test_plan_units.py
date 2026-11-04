@@ -12,10 +12,11 @@ class NextUnitTest(unittest.TestCase):
     def test_success_moves_to_next_and_wraps_around(self):
         self.assertEqual(next_unit([("강원", "success")]), "충청:충남")
         self.assertEqual(next_unit([(UNITS[-1], "success")]), UNITS[0])
+        self.assertEqual(next_unit([("경북:2/2", "success")]), "경기:선정")
 
     def test_skipped_day_does_not_skip_a_unit(self):
         # 2026-11-01 사고: 날짜 방식은 강원을 건너뛰었다. 기록 기준이면 경북 뒤에 바로 강원이 아니라 '지난번 다음'이다.
-        hist = [("경북:1/2", "success"), ("경북:2/2", "success")]
+        hist = [("경기:선정", "success")]
         self.assertEqual(next_unit(hist), "강원")
 
     def test_failure_retries_same_unit_once_then_moves_on(self):
@@ -69,8 +70,10 @@ class UnitsMatchCrawlerTest(unittest.TestCase):
             for x in names:
                 self.assertNotIn(x, seen, f"{x} 가 {seen.get(x)} 와 {u} 에 중복")
                 seen[x] = u
-        self.assertEqual(len(seen), 99)             # 경기·인천 25곳은 정기 수집에 없다
-        self.assertNotIn("경기신문", seen)
+        self.assertEqual(len(seen), 107)            # 99곳 + 경기 8곳
+        self.assertEqual({k for k, v in seen.items() if v == "경기:선정"},
+                         {"경기신문", "용인시민신문", "평택시민신문", "이천설봉신문", "구리남양주뉴스", "여주신문", "양평시민의소리", "가평타임즈"})
+        self.assertNotIn("기호일보", seen)            # 경기·인천의 나머지 17곳은 정기 수집에 없다
 
 
 if __name__ == "__main__":

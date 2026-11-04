@@ -18,7 +18,7 @@ import subprocess
 import sys
 from typing import List, Optional, Sequence, Tuple
 
-# 하루에 한 단위, 한 바퀴 9일. 경기·인천은 아직 정기 수집에 넣지 않았다(수동 실행으로만).
+# 하루에 한 단위, 한 바퀴 10일. 경기·인천은 8곳("경기:선정", run_crawl.PART_GROUPS)만 정기 수집하고 나머지 17곳은 수동 실행으로만 돈다.
 UNITS = [
     "강원",
     "충청:충남",
@@ -29,6 +29,7 @@ UNITS = [
     "경남:2/2",
     "경북:1/2",
     "경북:2/2",
+    "경기:선정",
 ]
 MAX_ATTEMPTS = 2          # 같은 단위가 이 횟수 연속으로 실패하면 건너뛰고 다음으로 간다
 HISTORY_RUNS = 12         # 최근 예약 실행을 몇 개까지 읽을지
