@@ -240,12 +240,15 @@ class RunLog:
         rows = []
         for pr in props[1:]:
             title = pr["title"]
-            region, _, kind = title.rpartition("_")
-            if kind not in kinds:
-                continue  # news_ 등 다른 용도의 탭은 목차에서 뺀다
+            if title.startswith("news_"):  # 신문 수집 로그(news/common/run_log.py): news_실행기록, news_신문사별
+                region, kind = "news", title[len("news_"):]
+            else:  # 'PCwj경북_문서처리' 처럼 PC 이름이 앞에 붙은 탭도 같은 규칙('{접두}{지역}_{시트명}')
+                region, _, kind = title.rpartition("_")
+                if kind not in kinds:
+                    region, kind = title, ""  # 모르는 형식의 탭도 목차에는 넣는다
             safe = title.replace('"', '""')
             q = title.replace("'", "''")
-            rows.append((region, kinds.index(kind), [
+            rows.append((region, kinds.index(kind) if kind in kinds else 99, [
                 region, kind,
                 f'=HYPERLINK("#gid={pr["sheetId"]}","{safe}")',
                 f"=COUNTA('{q}'!A:A)-1",
