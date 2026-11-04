@@ -41,9 +41,26 @@ DEFAULT_EXCEL = os.path.join(HERE, "output", "시군구_공보게시판_목록_n
 # 지역 그룹 -> 고시공고 도(cities/*.py PROVINCE_NAME) 목록. 공보는 엑셀의 '권역(파일)' 이 지역 이름과 같은 게시판.
 # 전국은 기관이 많아 실행 시간이 길어지므로 둘로 나눠 각각 따로 돈다(DB 파일도 전국1/전국2 로 분리: 같은 파일을 두 job 이 동시에 커밋하면 충돌).
 # 공보 엑셀에는 '전국' 권역이 없어 전국1/2 는 고시공고만 수집한다.
-REGION_PROVINCES = {"전국1": ["중앙기관"], "전국2": ["공기업", "관보"]}
+# 2026-11-04 전국1/전국2 를 기관 유형별 7개 그룹으로 세분화했다(그룹마다 DB 파일·수집로그 탭·워크플로 job 이 따로 생긴다).
+# 새 기관은 cities/central_agencies.py·dev_corps.py 에 City 를 추가하고 아래 REGION_CITIES 의 알맞은 그룹에 이름만 넣는다.
+REGION_PROVINCES = {
+    "중앙국토부": ["중앙기관"], "중앙환경청": ["중앙기관"], "중앙보상": ["중앙기관"], "중앙국방": ["중앙기관"],
+    "공기업개발공사": ["공기업"], "공기업도시공사": ["공기업"], "관보": ["관보"],
+}
+REGION_CITIES = {
+    "중앙국토부": ["원주지방국토관리청", "대전지방국토관리청", "익산지방국토관리청", "부산지방국토관리청",
+               "서울지방항공청", "부산지방항공청"],
+    "중앙환경청": ["금강유역환경청", "한강유역환경청", "낙동강유역환경청", "영산강유역환경청"],
+    "중앙보상": ["한국부동산원", "LH보상정보"],
+    "중앙국방": ["국방시설본부", "국방부고시공고"],
+    "공기업개발공사": ["경상북도개발공사", "경상남도개발공사", "전북개발공사", "강원개발공사", "충남개발공사", "충북개발공사"],
+    "공기업도시공사": ["부천도시공사", "서울주택도시공사(SH)", "부산도시공사", "인천도시공사", "대전도시공사",
+                "울산도시공사", "광주광역시도시공사"],
+    "관보": ["전자관보"],
+}
+WIDE_REGIONS = list(REGION_CITIES)  # 지자체 16곳과 달리 기관이 많아 5일에 한 번 도는 그룹들
 REGIONS = ["강원", "경기", "경남", "경북", "광주", "대구", "대전", "부산", "세종", "울산", "인천", "전남", "전북",
-           "제주", "충남", "충북", "전국1", "전국2"]
+           "제주", "충남", "충북"] + WIDE_REGIONS
 
 
 def region_db_path(region):
@@ -177,10 +194,11 @@ def main():
                     help="호스티드 러너에서 막히는 게시판(core/blocked_sites.py): all=전부(기본), skip=건너뜀, only=그곳만(국내 IP 러너용)")
     a = ap.parse_args()
 
-    provinces, modules = a.province, a.module
+    provinces, modules, cities = a.province, a.module, a.city
     if a.region:
         provinces = REGION_PROVINCES.get(a.region, [a.region])
         modules = [a.region]
+        cities = cities or REGION_CITIES.get(a.region)
     db = a.db or (region_db_path(a.region) if a.region else DEFAULT_DB)
     LOG.region = a.log_prefix + (a.region or "전체")
     log_path = str(DATA_DIR / "logs" / f"{LOG.region}_수집로그.xlsx")
@@ -203,7 +221,7 @@ def main():
         S.log_run(con, started, "retry", 0, msg)
         S.prune_old(con)  # 오래된 점검용 행 정리(필지·공고는 그대로)
         if a.preflight:
-            ok, total, bad = PF.probe(board_urls(provinces, modules, a.city, a.excel, a.only, a.region, a.blocked))
+            ok, total, bad = PF.probe(board_urls(provinces, modules, cities, a.excel, a.only, a.region, a.blocked))
             msg = f"사전 점검(시도 {attempt}회차): 사이트 {total}곳 중 {ok}곳 접속 가능({ok * 100 // max(total, 1)}%, 기준 {int(PF.MIN_OK_RATIO * 100)}% 미만이면 차단 의심)"
             if bad:
                 msg += f", 안 닿는 {len(bad)}곳 단계별 {PF.stage_counts(bad)}, 예 {PF.stage_examples(bad, 5)}"
@@ -215,9 +233,9 @@ def main():
         if blocked_ip:
             pass
         elif a.only != "gazette":
-            job_gosigongo(con, a.gosi_days, a.delay, provinces, a.city, a.region, a.blocked, a.reread)
+            job_gosigongo(con, a.gosi_days, a.delay, provinces, cities, a.region, a.blocked, a.reread)
         if not blocked_ip and a.only != "gosigongo":
-            job_gazette(con, a.gazette_days, a.workers, a.excel, modules, a.city, a.blocked, a.reread)
+            job_gazette(con, a.gazette_days, a.workers, a.excel, modules, cities, a.blocked, a.reread)
     finally:
         con.close()
         net = LOG.network_summary()  # 목록 오류가 있으면 접속 단계별로 세어 러너 IP 차단/사이트 문제를 한 줄로 판정(게시판상태 행에도 진단이 붙는다)
