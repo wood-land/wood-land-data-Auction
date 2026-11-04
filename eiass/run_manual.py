@@ -126,9 +126,9 @@ def apply_one(cd, points_path, state, force=False):
 
 
 def import_georef_points():
-    """QGIS 지리참조자가 전체 도면 옆에 저장한 'figures/georef/{코드}_..._도면.png.points' 를 manual/{코드}.points 로 가져온다.
+    """QGIS 지리참조자가 전체 도면 옆에 저장한 'check Plz/{코드}_..._도면.png.points' 를 manual/{코드}.points 로 가져온다.
     사람이 이름을 바꿔 옮기지 않아도 된다. 이미 처리해 보관한(같은 내용) 점은 건너뛰고, 원본은 지울 수 있으면 지운다."""
-    gdir = store.DATA / "figures" / "georef"
+    gdir = store.DATA / store.CHECK_DIR
     mdir = store.DATA / "manual"
     n = 0
     for src in sorted(gdir.glob("*_도면.png.points")):
