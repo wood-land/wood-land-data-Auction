@@ -82,33 +82,27 @@ def safe_name(location, limit=60):
     return s[:limit].strip() or "위치미상"
 
 
-def make_cutout(data_dir, cd):
-    """_review.png 에서 사업지구만 오려 figures/georef/{코드}_{대표지번}_site.png 로 만들고, 요청(_review.json)에 오프셋을 적는다.
-    사람은 이 오려낸 그림을 지리참조자에 올려 점을 찍는다(run_manual.py 가 오프셋을 더해 원래 그림 좌표로 되돌린다)."""
-    import cv2
-    import numpy as np
-    from . import figure
+def make_request_image(data_dir, cd):
+    """사람이 지리참조자에 올릴 전체 도면: _review.png 를 figures/georef/{코드}_{대표지번}_도면.png 로 복사한다.
+    주변 도로·지형·글자가 다 보여야 지도와 비교해 점을 찍을 수 있으므로 오려내지 않는다. 확정 결과(사업지만 오린 투명 PNG)는 run_manual.py 가 따로 만든다."""
+    import shutil
     rp = data_dir / "figures" / f"{cd}_review.json"
     pp = data_dir / "figures" / f"{cd}_review.png"
     if not rp.exists() or not pp.exists():
         return None
     req = json.loads(rp.read_text(encoding="utf-8"))
-    if not req.get("contour_page_px"):
-        return None
-    img = cv2.imread(str(pp), cv2.IMREAD_COLOR)
-    if img is None:
-        return None
-    k = req["png_scale"]
-    contour = np.array(req["contour_page_px"], float) * k
     gdir = data_dir / "figures" / "georef"
-    for old in gdir.glob(f"{cd}_*_site.png"):
-        old.unlink()
-    out = gdir / f"{cd}_{safe_name(req.get('location'))}_site.png"
-    off = figure.cutout_png(img, contour, out)
-    if off is None:
-        return None
-    req["cutout"] = {"png": f"figures/georef/{out.name}", "offset_png_px": [off[0], off[1]]}
-    req["how"] = ("QGIS 지리참조자에 cutout.png(오려낸 그림, 파일 이름에 대표 지번)를 올려 기준점 2점 이상(도로 교차점·시설 모서리·경계 꼭짓점 등)을 찍고 "
-                  "GCP 를 eiass/manual/%s.points 로 저장" % cd)
+    gdir.mkdir(parents=True, exist_ok=True)
+    for old in list(gdir.glob(f"{cd}_*_도면.png")) + list(gdir.glob(f"{cd}_*_site.png")):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    out = gdir / f"{cd}_{safe_name(req.get('location'))}_도면.png"
+    shutil.copyfile(pp, out)
+    req.pop("cutout", None)
+    req["georef_png"] = f"figures/georef/{out.name}"
+    req["how"] = ("QGIS 지리참조자에 georef_png(전체 도면, 파일 이름에 대표 지번)를 올려 기준점 2점 이상(도로 교차점·시설 모서리 등)을 찍고 "
+                  "GCP 를 저장하면 ★지리참조_반영_더블클릭.bat 이 반영한다")
     rp.write_text(json.dumps(req, ensure_ascii=False), encoding="utf-8")
     return out

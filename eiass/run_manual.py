@@ -39,7 +39,7 @@ def file_hash(p):
     return hashlib.md5(Path(p).read_bytes()).hexdigest()[:12]
 
 
-def apply_one(cd, points_path, state, force=False, full=False):
+def apply_one(cd, points_path, state, force=False):
     req_p = store.DATA / "figures" / f"{cd}_review.json"
     if not req_p.exists():
         raise Rejected(f"요청 꾸러미({req_p.name})가 없음 - 자동 추출이 검토대기로 만든 사업이어야 함")
@@ -52,9 +52,6 @@ def apply_one(cd, points_path, state, force=False, full=False):
         raise Rejected("쓸 수 있는 기준점이 없음(.points 에 켜 둔 점이 없음)")
     k = req["png_scale"]
     png_w = req["page_size_hw"][1] * k
-    if req.get("cutout") and not full:     # 오려낸 그림 기준으로 찍은 점 -> 원래 도면 PNG 좌표로
-        ox, oy = req["cutout"]["offset_png_px"]
-        pts = [(sx + ox, sy + oy, X, Y) for sx, sy, X, Y in pts]
     problems = []
     if len(pts) >= 2:
         far = max(math.hypot(a[0] - b[0], a[1] - b[1]) for a in pts for b in pts)
@@ -125,12 +122,12 @@ def apply_one(cd, points_path, state, force=False, full=False):
 
 
 def import_georef_points():
-    """QGIS 지리참조자가 오려낸 그림 옆에 저장한 'figures/georef/{코드}_..._site.png.points' 를 manual/{코드}.points 로 가져온다.
+    """QGIS 지리참조자가 전체 도면 옆에 저장한 'figures/georef/{코드}_..._도면.png.points' 를 manual/{코드}.points 로 가져온다.
     사람이 이름을 바꿔 옮기지 않아도 된다. 이미 처리해 보관한(같은 내용) 점은 건너뛰고, 원본은 지울 수 있으면 지운다."""
     gdir = store.DATA / "figures" / "georef"
     mdir = store.DATA / "manual"
     n = 0
-    for src in sorted(gdir.glob("*_site.png.points")):
+    for src in sorted(gdir.glob("*_도면.png.points")):
         cd = src.name.split("_")[0]
         done = mdir / "done" / f"{cd}.points"
         if done.exists() and file_hash(done) == file_hash(src):
@@ -166,7 +163,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("codes", nargs="*")
     ap.add_argument("--points", default="")
-    ap.add_argument("--full", action="store_true", help="점을 오려낸 그림이 아니라 쪽 전체 PNG(_review.png) 기준으로 찍은 경우")
     ap.add_argument("--force", action="store_true", help="검증 경고(잔차·면적차·점 간격)를 무시하고 확정")
     a = ap.parse_args()
     store.ensure_dirs()
@@ -186,7 +182,7 @@ def main():
         if prev.get("hash") == h and not a.force:
             print(f"{cd}: 이미 같은 점으로 실패함({prev.get('reason', '')[:60]}) - 점을 고쳐 다시 올려 주세요"); n_skip += 1; continue
         try:
-            apply_one(cd, pp, state, a.force, a.full)
+            apply_one(cd, pp, state, a.force)
             if not a.points:
                 archive_points(cd, pp)
             n_ok += 1

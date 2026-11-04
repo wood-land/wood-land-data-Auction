@@ -180,7 +180,7 @@ def write_approx(biz_cd, meta, lon, lat, how, plan_m2, parcel_geom4326=None, rou
 
 def clear_georef_request(biz_cd):
     """확정된 사업의 지리참조 요청 꾸러미(도면 PNG·오려낸 그림)를 지운다. _site.png(결과)는 남긴다."""
-    paths = [DATA / "figures" / f"{biz_cd}_review.png", *(DATA / "figures" / "georef").glob(f"{biz_cd}_*_site.png")]
+    paths = [DATA / "figures" / f"{biz_cd}_review.png", *(DATA / "figures" / "georef").glob(f"{biz_cd}_*_도면.png")]
     for f in paths:
         try:
             f.unlink(missing_ok=True)

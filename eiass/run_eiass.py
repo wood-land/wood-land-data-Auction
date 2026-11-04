@@ -323,10 +323,10 @@ def process(E, row, state, force=False):
         if k:   # 지리참조 결과(.points)를 쪽 px 로 되돌리고 경계를 옮기는 데 필요한 정보
             manual.write_request(store.DATA, cd, meta, k=k, page=page_of.get(id(img)), contour=None if e is None else e["contour"],
                                  plan=plan, lonlat=(lon, lat), size=img.shape[:2])
-            try:   # 지리참조용 오려낸 그림(사업지구만, 파일 이름에 대표 지번)
-                manual.make_cutout(store.DATA, cd)
+            try:   # 지리참조용 전체 도면(파일 이름에 대표 지번)
+                manual.make_request_image(store.DATA, cd)
             except Exception as err:
-                log("    오려낸 그림 실패:", err)
+                log("    지리참조용 도면 복사 실패:", err)
     try:   # 단서가 부족해도 대표지번 주변 원과 대표지번 필지는 QGIS 에 남긴다
         pg = None
         if str(how).startswith("PARCEL"):
