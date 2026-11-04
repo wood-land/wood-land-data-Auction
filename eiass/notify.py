@@ -84,6 +84,8 @@ def main():
             print(f"이슈 생성 #{v['issue']} {cd}"); changed = True
         elif num and not need_human:
             why = {"ok": "완료되어", "skip": "자동 추출 대상이 아니거나 공람이 끝나(파일 비공개)"}.get(v.get("status"), f"상태가 {v.get('status')}(으)로 바뀌어")
+            if v.get("dismissed"):
+                why = "사람이 검토 대상에서 제외하여"
             update(num, state="closed", comment=f"{why} 닫습니다. ({v.get('note','')})")
             print(f"이슈 닫음 #{num} {cd}"); v["issue"] = None; changed = True
     # 사람이 올린 기준점(.points)을 run_manual.py 가 검증하다 실패한 사업: 사유를 이슈에 한 번 댓글로 남긴다

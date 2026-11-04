@@ -143,6 +143,35 @@ def import_georef_points():
     return n
 
 
+def dismiss_removed(state):
+    """사람이 check Plz 에서 도면 파일을 지운 검토대기 사업은 '검토 제외'(skip)로 하고 흔적(대략위치 원·요청 꾸러미)을 모두 지운다.
+    요청 도면이 만들어진 적이 있는데(요청 json 에 georef_png) 지금 파일이 없는 경우만 해당한다. 이미 기준점(.points)이 올라온 사업은 건드리지 않는다."""
+    cdir = store.DATA / store.CHECK_DIR
+    gone = []
+    for cd, v in state.items():
+        if not isinstance(v, dict) or cd.startswith("_") or v.get("status") != "review":
+            continue
+        rp = store.DATA / "figures" / f"{cd}_review.json"
+        if not rp.exists():
+            continue
+        try:
+            gp = json.loads(rp.read_text(encoding="utf-8")).get("georef_png")
+        except (OSError, ValueError):
+            continue
+        if not gp or (store.DATA / gp).exists():
+            continue
+        if list(cdir.glob(f"{cd}_*.points")) or (store.DATA / "manual" / f"{cd}.points").exists():
+            continue
+        v.update({"status": "skip", "need": None, "dismissed": True, "date": R.TODAY,
+                  "note": "사람이 검토 제외함(check Plz 에서 도면 파일을 지움)"})
+        store.clear_approx(cd)
+        for f in list((store.DATA / "review").glob(f"{cd}.*")) + [rp, store.DATA / "figures" / f"{cd}_review.png"]:
+            f.unlink(missing_ok=True)
+        print(f"  {cd}: 검토 제외(도면 파일을 지움) - 대략위치 원·요청 파일 삭제")
+        gone.append(cd)
+    return gone
+
+
 def archive_points(cd, points_path):
     """확정한 .points 를 manual/done/ 으로 옮겨 다시 처리하지 않게 하고, 나중에 같은 결과를 다시 만들 수 있게 보관한다."""
     done = store.DATA / "manual" / "done"
@@ -173,9 +202,16 @@ def main():
     state = store.load_state()
     mdir = store.DATA / "manual"
     import_georef_points()
+    dismissed = [] if a.codes else dismiss_removed(state)
+    if dismissed:
+        store.save_state(state)
     codes = a.codes or [p.stem for p in sorted(mdir.glob("*.points"))]
     if not codes:
-        print("처리할 기준점 파일이 없음 (eiass/manual/{코드}.points)"); return 0
+        if dismissed:
+            print(f"레이어 사업지구 {store.rebuild_gpkg()}건")
+        else:
+            print("처리할 기준점 파일이 없음 (eiass/manual/{코드}.points)")
+        return 0
     n_ok = n_fail = n_skip = 0
     for cd in codes:
         pp = Path(a.points) if a.points else mdir / f"{cd}.points"
@@ -200,7 +236,7 @@ def main():
                                                        "date": R.TODAY, "commented": False}
             n_fail += 1
         store.save_state(state)
-    n = store.rebuild_gpkg() if n_ok else None
+    n = store.rebuild_gpkg() if (n_ok or dismissed) else None
     print(f"\n요약 확정 {n_ok} / 확정 안 함 {n_fail} / 이미 실패한 점 {n_skip}" + (f" / 레이어 사업지구 {n}건" if n is not None else ""))
     return 0
 
