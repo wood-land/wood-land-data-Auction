@@ -24,7 +24,8 @@ from core import store
 API = "https://api.github.com"
 REPO = os.environ.get("GITHUB_REPOSITORY", "wood-land/wood-land-data-Auction")
 TOKEN = os.environ.get("GH_TOKEN", "")
-DB_URL = "https://github.com/wood-land/wood-land-data-db/blob/main/eiass"
+DB_ROOT_URL = "https://github.com/wood-land/wood-land-data-db/blob/main"
+DB_URL = DB_ROOT_URL + "/eiass"
 EIASS_URL = "https://www.eiass.go.kr/partcptn/choan/choanEiassList.do"
 S = requests.Session()
 S.headers.update({"Authorization": f"Bearer {TOKEN}", "Accept": "application/vnd.github+json"})
@@ -66,8 +67,8 @@ def main():
         need_human = v.get("status") == "review" and v.get("need") == "human"
         num = v.get("issue")
         if need_human and not num:
-            cut = next(iter(sorted((store.DATA / store.CHECK_DIR).glob(f"{cd}_*_도면.png"))), None)
-            png_link = (f"[{cut.name}]({DB_URL}/{urllib.parse.quote(store.CHECK_DIR)}/{urllib.parse.quote(cut.name)}) (전체 도면, 이름에 대표 지번)" if cut
+            cut = next(iter(sorted(store.check_path().glob(f"{cd}_*_도면.png"))), None)
+            png_link = (f"[{cut.name}]({DB_ROOT_URL}/{urllib.parse.quote(store.CHECK_DIR)}/{urllib.parse.quote(cut.name)}) (전체 도면, 이름에 대표 지번)" if cut
                         else f"[{cd}_review.png]({DB_URL}/figures/{cd}_review.png)")
             body = (f"사람 확인이 필요한 환경영향평가 초안공람 사업입니다.\n\n"
                     f"- 사업코드: `{cd}`\n- 사업명: {v.get('biz_nm','')}\n- 공람기간: {v.get('choan_period','')}\n"

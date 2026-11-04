@@ -180,7 +180,7 @@ def write_approx(biz_cd, meta, lon, lat, how, plan_m2, parcel_geom4326=None, rou
 
 def clear_georef_request(biz_cd):
     """확정된 사업의 지리참조 요청 꾸러미(도면 PNG·오려낸 그림)를 지운다. _site.png(결과)는 남긴다."""
-    paths = [DATA / "figures" / f"{biz_cd}_review.png", *(DATA / CHECK_DIR).glob(f"{biz_cd}_*_도면.png")]
+    paths = [DATA / "figures" / f"{biz_cd}_review.png", *check_path().glob(f"{biz_cd}_*_도면.png")]
     for f in paths:
         try:
             f.unlink(missing_ok=True)
@@ -193,7 +193,13 @@ def clear_approx(biz_cd):
         f.unlink()
 
 
-CHECK_DIR = "check Plz"   # 사람이 지리참조자로 검토할 도면을 넣는 폴더(DB 저장소 eiass/ 바로 아래)
+CHECK_DIR = "eiass_check plz"   # 사람이 지리참조자로 검토할 도면을 넣는 폴더(DB 저장소 맨 위, eiass/ 와 나란히. 실행용 bat 도 여기 있다)
+
+
+def check_path():
+    return DATA.parent / CHECK_DIR
+
+
 LAYER = "EIASS_초안사업지"   # gpkg 안의 레이어는 하나. 종류는 필드 '구분'(사업지구·대략위치·대표지번필지)
 
 

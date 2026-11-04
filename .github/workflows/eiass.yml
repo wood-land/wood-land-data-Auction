@@ -122,7 +122,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           [ -d eiass ] || { echo "eiass/ 없음"; exit 0; }
-          git add eiass
+          git add -A -- eiass
+          git add -A -- "eiass_check plz" || true   # 사람이 검토할 도면 폴더(DB 저장소 맨 위)
           if git diff --cached --quiet; then echo "변경 없음"; exit 0; fi
           git commit -m "eiass: 초안공람 사업지구 갱신 $(date -u +%F)"
           echo "DB 저장소 크기: $(git count-objects -vH | grep size-pack)"

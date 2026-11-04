@@ -1,5 +1,5 @@
 """
-run_request.py - 지리참조용 전체 도면(check Plz/{코드}_{대표지번}_도면.png)을 (다시) 만든다.
+run_request.py - 지리참조용 전체 도면(eiass_check plz/{코드}_{대표지번}_도면.png)을 (다시) 만든다.
 
   python run_request.py                       # 검토대기 사업 전부(글자 방향으로 회전을 자동 판별)
   python run_request.py HG2026A008            # 한 사업

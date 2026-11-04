@@ -5,7 +5,7 @@ run_manual.py - 사람이 지리참조자로 찍은 기준점(.points)으로 검
   python run_manual.py ND2026D003                   # DB 저장소 eiass/manual/ND2026D003.points 사용
   python run_manual.py ND2026D003 --points 경로.points
   python run_manual.py ND2026D003 --force           # 경고(잔차·면적차·점 간격)를 무시하고 확정
-  python run_manual.py HG2026L002 --dismiss         # 검토할 가치가 없는 사업 제외(도면 파일이 없는 사업용. 도면이 있으면 check Plz 에서 파일을 지우면 된다)
+  python run_manual.py HG2026L002 --dismiss         # 검토할 가치가 없는 사업 제외(도면 파일이 없는 사업용. 도면이 있으면 eiass_check plz 에서 파일을 지우면 된다)
 
 요청 꾸러미: figures/{코드}_review.png (+ _review.json). 기준점은 이 PNG 위에서 찍어야 한다.
 처리 순서: 점 읽기 -> 검증 -> 닮음변환 맞춤 -> 경계·필지·미리보기·투명 PNG 저장 -> 상태 ok(등급 C) -> .points 를 manual/done/ 으로 보관.
@@ -127,9 +127,9 @@ def apply_one(cd, points_path, state, force=False):
 
 
 def import_georef_points(state=None):
-    """QGIS 지리참조자가 전체 도면 옆에 저장한 'check Plz/{코드}_..._도면.png.points' 를 manual/{코드}.points 로 가져온다.
+    """QGIS 지리참조자가 전체 도면 옆에 저장한 'eiass_check plz/{코드}_..._도면.png.points' 를 manual/{코드}.points 로 가져온다.
     사람이 이름을 바꿔 옮기지 않아도 된다. 이미 처리해 보관한(같은 내용) 점은 건너뛰고, 원본은 지울 수 있으면 지운다."""
-    gdir = store.DATA / store.CHECK_DIR
+    gdir = store.check_path()
     mdir = store.DATA / "manual"
     n = 0
     for src in sorted(gdir.glob("*_도면.png.points")):
@@ -147,9 +147,9 @@ def import_georef_points(state=None):
 
 
 def dismiss_removed(state):
-    """사람이 check Plz 에서 도면 파일을 지운 검토대기 사업은 '검토 제외'(skip)로 하고 흔적(대략위치 원·요청 꾸러미)을 모두 지운다.
+    """사람이 eiass_check plz 에서 도면 파일을 지운 검토대기 사업은 '검토 제외'(skip)로 하고 흔적(대략위치 원·요청 꾸러미)을 모두 지운다.
     요청 도면이 만들어진 적이 있는데(요청 json 에 georef_png) 지금 파일이 없는 경우만 해당한다. 이미 기준점(.points)이 올라온 사업은 건드리지 않는다."""
-    cdir = store.DATA / store.CHECK_DIR
+    cdir = store.check_path()
     gone = []
     for cd, v in state.items():
         if not isinstance(v, dict) or cd.startswith("_") or v.get("status") != "review":
@@ -161,11 +161,11 @@ def dismiss_removed(state):
             gp = json.loads(rp.read_text(encoding="utf-8")).get("georef_png")
         except (OSError, ValueError):
             continue
-        if not gp or (store.DATA / gp).exists():
+        if not gp or (store.DATA.parent / gp).exists():
             continue
         if list(cdir.glob(f"{cd}_*.points")) or (store.DATA / "manual" / f"{cd}.points").exists():
             continue
-        dismiss_one(state, cd, "사람이 검토 제외함(check Plz 에서 도면 파일을 지움)")
+        dismiss_one(state, cd, "사람이 검토 제외함(eiass_check plz 에서 도면 파일을 지움)")
         gone.append(cd)
     return gone
 
@@ -181,10 +181,10 @@ def dismiss_one(state, cd, note):
 
 
 def sweep_check_dir(state):
-    """check Plz 에는 '지금 사람이 해야 할 사업'(검토대기)의 파일만 남긴다. 확정(ok)·제외(skip)된 사업의 파일(도면·QGIS 가 만든 .points·_modified.tif·.aux.xml)은 지운다.
+    """eiass_check plz 에는 '지금 사람이 해야 할 사업'(검토대기)의 파일만 남긴다. 확정(ok)·제외(skip)된 사업의 파일(도면·QGIS 가 만든 .points·_modified.tif·.aux.xml)은 지운다.
     QGIS 가 열어 둔 파일은 지울 수 없으니 건너뛰고 다음 실행에서 다시 지운다. 지운 파일 수를 돌려준다."""
     import re
-    cdir = store.DATA / store.CHECK_DIR
+    cdir = store.check_path()
     n = 0
     for f in sorted(cdir.glob("*")) if cdir.exists() else []:
         m = re.match(r"^([A-Za-z]{2}\d{4}[A-Za-z]\d{3})_", f.name)
@@ -247,7 +247,7 @@ def main():
     if not codes:
         swept = sweep_check_dir(state)
         if swept:
-            print(f"check Plz 정리: 처리 끝난 사업의 파일 {swept}개 삭제")
+            print(f"eiass_check plz 정리: 처리 끝난 사업의 파일 {swept}개 삭제")
         if dismissed:
             print(f"레이어 사업지구 {store.rebuild_gpkg()}건")
         else:
@@ -279,7 +279,7 @@ def main():
         store.save_state(state)
     swept = sweep_check_dir(state)
     if swept:
-        print(f"check Plz 정리: 처리 끝난 사업의 파일 {swept}개 삭제")
+        print(f"eiass_check plz 정리: 처리 끝난 사업의 파일 {swept}개 삭제")
     n = store.rebuild_gpkg() if (n_ok or dismissed) else None
     print(f"\n요약 확정 {n_ok} / 확정 안 함 {n_fail} / 이미 실패한 점 {n_skip}" + (f" / 레이어 사업지구 {n}건" if n is not None else ""))
     return 0

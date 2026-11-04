@@ -81,7 +81,8 @@ def _main(no_git, rec):
     rec["stage"] = "push"
     rec["result"] = done  # 이 줄이 DB 저장소에 올라간다(실패한 실행도 남긴다). push 성공 여부는 이 PC 의 로컬 기록에 남는다
     pc_common.append_record(runs_file, rec)
-    git(db, "add", "eiass")
+    git(db, "add", "-A", "--", "eiass")
+    git(db, "add", "-A", "--", "eiass_check plz", check=False)   # 사람이 검토할 도면 폴더
     if git(db, "diff", "--cached", "--quiet", check=False).returncode == 0:
         print("변경 없음"); rec["result"] = "ok (no change)" if rc == 0 else done; return rc
     git(db, "commit", "-m", f"eiass: 국내 IP PC 처리 결과 [{pc}]")

@@ -115,7 +115,7 @@ def rot_to_orig(rot, u, v, wo, ho):
 
 
 def make_request_image(data_dir, cd, rot=None):
-    """사람이 지리참조자에 올릴 전체 도면: _review.png 를 (필요하면 북쪽이 위가 되게 돌려) check Plz/{코드}_{대표지번}_도면.png 로 만든다.
+    """사람이 지리참조자에 올릴 전체 도면: _review.png 를 (필요하면 북쪽이 위가 되게 돌려) eiass_check plz/{코드}_{대표지번}_도면.png 로 만든다.
     주변 도로·지형·글자가 다 보여야 지도와 비교해 점을 찍을 수 있으므로 오려내지 않는다. rot: 시계 방향 0/90/180/270, 없으면 요청에 적힌 값, 그것도 없으면 글자 방향으로 자동 판별.
     돌린 각도는 요청(_review.json)의 georef_rot 에 적어, run_manual.py 가 점을 원래 그림 좌표로 되돌린다. 확정 결과(사업지만 오린 투명 PNG)는 run_manual.py 가 따로 만든다."""
     import cv2
@@ -134,7 +134,7 @@ def make_request_image(data_dir, cd, rot=None):
     codes = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
     out_img = cv2.rotate(img, codes[rot]) if rot in codes else img
     from .store import CHECK_DIR
-    gdir = data_dir / CHECK_DIR
+    gdir = data_dir.parent / CHECK_DIR           # DB 저장소 맨 위의 eiass_check plz
     gdir.mkdir(parents=True, exist_ok=True)
     for old in list(gdir.glob(f"{cd}_*_도면.png")) + list(gdir.glob(f"{cd}_*_site.png")):
         try:
@@ -147,7 +147,7 @@ def make_request_image(data_dir, cd, rot=None):
         return None
     out.write_bytes(buf.tobytes())
     req.pop("cutout", None)
-    req["georef_png"] = f"{CHECK_DIR}/{out.name}"
+    req["georef_png"] = f"{CHECK_DIR}/{out.name}"     # DB 저장소 기준 경로
     req["georef_rot"] = int(rot)
     req["georef_orig_wh"] = [int(img.shape[1]), int(img.shape[0])]
     req["how"] = ("QGIS 지리참조자에 georef_png(전체 도면, 파일 이름에 대표 지번)를 올려 기준점 2점 이상(도로 교차점·시설 모서리 등)을 찍고 "
