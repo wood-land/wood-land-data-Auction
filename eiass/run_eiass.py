@@ -291,7 +291,7 @@ def process(E, row, state, force=False):
                   meta["figure_png"] = f"figures/{cd}_site.png"
           except Exception as err:
               log("    사업지구 PNG 저장 실패:", err)
-          (store.DATA / "figures" / f"{cd}_review.png").unlink(missing_ok=True)
+          store.clear_georef_request(cd)
           store.write_project(cd, meta, transform(Transformer.from_crs(5186, 4326, always_xy=True).transform, poly))
           if vworld.available():
               rows = pnu_rows(poly, r.get("parcels")); how_pnu = "브이월드 연속지적도"
@@ -323,6 +323,10 @@ def process(E, row, state, force=False):
         if k:   # 지리참조 결과(.points)를 쪽 px 로 되돌리고 경계를 옮기는 데 필요한 정보
             manual.write_request(store.DATA, cd, meta, k=k, page=page_of.get(id(img)), contour=None if e is None else e["contour"],
                                  plan=plan, lonlat=(lon, lat), size=img.shape[:2])
+            try:   # 지리참조용 오려낸 그림(사업지구만, 파일 이름에 대표 지번)
+                manual.make_cutout(store.DATA, cd)
+            except Exception as err:
+                log("    오려낸 그림 실패:", err)
     try:   # 단서가 부족해도 대표지번 주변 원과 대표지번 필지는 QGIS 에 남긴다
         pg = None
         if str(how).startswith("PARCEL"):

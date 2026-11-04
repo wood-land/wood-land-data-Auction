@@ -39,7 +39,7 @@ def file_hash(p):
     return hashlib.md5(Path(p).read_bytes()).hexdigest()[:12]
 
 
-def apply_one(cd, points_path, state, force=False):
+def apply_one(cd, points_path, state, force=False, full=False):
     req_p = store.DATA / "figures" / f"{cd}_review.json"
     if not req_p.exists():
         raise Rejected(f"요청 꾸러미({req_p.name})가 없음 - 자동 추출이 검토대기로 만든 사업이어야 함")
@@ -52,6 +52,9 @@ def apply_one(cd, points_path, state, force=False):
         raise Rejected("쓸 수 있는 기준점이 없음(.points 에 켜 둔 점이 없음)")
     k = req["png_scale"]
     png_w = req["page_size_hw"][1] * k
+    if req.get("cutout") and not full:     # 오려낸 그림 기준으로 찍은 점 -> 원래 도면 PNG 좌표로
+        ox, oy = req["cutout"]["offset_png_px"]
+        pts = [(sx + ox, sy + oy, X, Y) for sx, sy, X, Y in pts]
     problems = []
     if len(pts) >= 2:
         far = max(math.hypot(a[0] - b[0], a[1] - b[1]) for a in pts for b in pts)
@@ -115,6 +118,7 @@ def apply_one(cd, points_path, state, force=False):
     for f in (store.DATA / "review").glob(f"{cd}.*"):
         f.unlink()
     store.clear_approx(cd)
+    store.clear_georef_request(cd)
     st = state.setdefault(cd, {})
     st.update({"status": "ok", "note": f"수동 지리참조 {len(pairs)}점", "need": None, "manual": True, "manual_fail": None, "date": R.TODAY})
     print(f"  저장: 필지 {len(rows)}건")
@@ -144,6 +148,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("codes", nargs="*")
     ap.add_argument("--points", default="")
+    ap.add_argument("--full", action="store_true", help="점을 오려낸 그림이 아니라 쪽 전체 PNG(_review.png) 기준으로 찍은 경우")
     ap.add_argument("--force", action="store_true", help="검증 경고(잔차·면적차·점 간격)를 무시하고 확정")
     a = ap.parse_args()
     store.ensure_dirs()
@@ -162,7 +167,7 @@ def main():
         if prev.get("hash") == h and not a.force:
             print(f"{cd}: 이미 같은 점으로 실패함({prev.get('reason', '')[:60]}) - 점을 고쳐 다시 올려 주세요"); n_skip += 1; continue
         try:
-            apply_one(cd, pp, state, a.force)
+            apply_one(cd, pp, state, a.force, a.full)
             if not a.points:
                 archive_points(cd, pp)
             n_ok += 1

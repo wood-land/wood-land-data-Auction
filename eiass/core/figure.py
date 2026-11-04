@@ -38,3 +38,24 @@ def write_site_png(img_rgb, contour, A, crs, path, margin=6):
     path.with_suffix(".pgw").write_text("\n".join(repr(float(v)) for v in (a00, a10, a01, a11, C, F)))
     path.with_suffix(".prj").write_text(WKT[crs])
     return float(np.hypot(a00, a10) * (x1 - x0)), float(np.hypot(a01, a11) * (y1 - y0))
+
+
+def cutout_png(img_bgr, contour, path, margin=6):
+    """지리참조용 오려낸 그림: 사업지구 안쪽만 남기고 바깥은 투명, 사업지구 사각형으로 자른다(월드파일 없음).
+    img_bgr·contour 는 같은 픽셀 좌표계(보통 _review.png). 반환: 잘라낸 왼쪽 위 (x0, y0) - 지리참조 점의 픽셀 좌표를 원래 그림으로 되돌릴 때 더한다."""
+    H, W = img_bgr.shape[:2]
+    m = np.zeros((H, W), np.uint8)
+    cv2.fillPoly(m, [np.int32(np.round(contour))], 255)
+    k = 2 * margin + 1
+    m = cv2.GaussianBlur(cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))), (0, 0), 1.2)
+    ys, xs = np.nonzero(m > 0)
+    if not len(xs):
+        return None
+    x0, x1, y0, y1 = int(xs.min()), int(xs.max()) + 1, int(ys.min()), int(ys.max()) + 1
+    rgba = np.dstack([img_bgr, m])[y0:y1, x0:x1]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ok, buf = cv2.imencode(".png", rgba)          # cv2.imwrite 는 한글이 든 경로(대표 지번 파일 이름)에 오류 없이 쓰지 못한다
+    if not ok:
+        return None
+    path.write_bytes(buf.tobytes())
+    return x0, y0

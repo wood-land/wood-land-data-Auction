@@ -15,6 +15,7 @@ import datetime
 import os
 import re
 import sys
+import urllib.parse
 
 import requests
 
@@ -65,12 +66,15 @@ def main():
         need_human = v.get("status") == "review" and v.get("need") == "human"
         num = v.get("issue")
         if need_human and not num:
+            cut = next(iter(sorted((store.DATA / "figures" / "georef").glob(f"{cd}_*_site.png"))), None)
+            png_link = (f"[{cut.name}]({DB_URL}/figures/georef/{urllib.parse.quote(cut.name)}) (사업지만 오려낸 그림, 이름에 대표 지번)" if cut
+                        else f"[{cd}_review.png]({DB_URL}/figures/{cd}_review.png)")
             body = (f"사람 확인이 필요한 환경영향평가 초안공람 사업입니다.\n\n"
                     f"- 사업코드: `{cd}`\n- 사업명: {v.get('biz_nm','')}\n- 공람기간: {v.get('choan_period','')}\n"
                     f"- 사유: {v.get('note','')}\n- 처리: {v.get('runner','')} / {v.get('date','')}\n\n"
                     f"확인 자료(비공개 DB 저장소): [{cd}.jpg]({DB_URL}/review/{cd}.jpg) · [{cd}.json]({DB_URL}/review/{cd}.json)\n"
                     f"EIASS 초안공람: {EIASS_URL}\n\n"
-                    f"**지리참조 요청**: 도면 PNG [{cd}_review.png]({DB_URL}/figures/{cd}_review.png) 를 QGIS 지리참조자에 올려 "
+                    f"**지리참조 요청**: 도면 PNG {png_link} 를 QGIS 지리참조자에 올려 "
                     f"기준점(도로 교차점·시설 모서리 등, 서로 멀리 떨어진 곳)을 **2점 이상** 찍고(좌표계 EPSG:5186), "
                     f"**GCP 점만 저장**(.points)해 `eiass/manual/{cd}.points` 로 DB 저장소에 올려 주세요(GitHub 웹 Add file 도 됩니다). "
                     f"다음 자동 실행 때 `run_manual.py` 가 검증(점 간격·잔차 15m·면적 ±10%)하고 통과하면 경계·PNU 를 만들어 이 이슈를 닫습니다(등급 C). "

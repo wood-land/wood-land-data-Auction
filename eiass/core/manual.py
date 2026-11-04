@@ -70,3 +70,43 @@ def fit_similarity(pairs, fixed_scale=None):
     A = np.array([[s * c, s * sn, qc[0] - s * c * pc[0] + s * sn * pc[1]],
                   [s * sn, -s * c, qc[1] - s * sn * pc[0] - s * c * pc[1]]])
     return A, res.tolist()
+
+
+def safe_name(location, limit=60):
+    """대표 지번(사업지 위치 글)을 파일 이름에 쓸 수 있게 다듬는다."""
+    import re
+    s = re.sub(r"[\/:*?\"<>|\r\n\t]", " ", (location or "").replace("\xa0", " "))
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:limit].strip() or "위치미상"
+
+
+def make_cutout(data_dir, cd):
+    """_review.png 에서 사업지구만 오려 figures/georef/{코드}_{대표지번}_site.png 로 만들고, 요청(_review.json)에 오프셋을 적는다.
+    사람은 이 오려낸 그림을 지리참조자에 올려 점을 찍는다(run_manual.py 가 오프셋을 더해 원래 그림 좌표로 되돌린다)."""
+    import cv2
+    import numpy as np
+    from . import figure
+    rp = data_dir / "figures" / f"{cd}_review.json"
+    pp = data_dir / "figures" / f"{cd}_review.png"
+    if not rp.exists() or not pp.exists():
+        return None
+    req = json.loads(rp.read_text(encoding="utf-8"))
+    if not req.get("contour_page_px"):
+        return None
+    img = cv2.imread(str(pp), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    k = req["png_scale"]
+    contour = np.array(req["contour_page_px"], float) * k
+    gdir = data_dir / "figures" / "georef"
+    for old in gdir.glob(f"{cd}_*_site.png"):
+        old.unlink()
+    out = gdir / f"{cd}_{safe_name(req.get('location'))}_site.png"
+    off = figure.cutout_png(img, contour, out)
+    if off is None:
+        return None
+    req["cutout"] = {"png": f"figures/georef/{out.name}", "offset_png_px": [off[0], off[1]]}
+    req["how"] = ("QGIS 지리참조자에 cutout.png(오려낸 그림, 파일 이름에 대표 지번)를 올려 기준점 2점 이상(도로 교차점·시설 모서리·경계 꼭짓점 등)을 찍고 "
+                  "GCP 를 eiass/manual/%s.points 로 저장" % cd)
+    rp.write_text(json.dumps(req, ensure_ascii=False), encoding="utf-8")
+    return out
