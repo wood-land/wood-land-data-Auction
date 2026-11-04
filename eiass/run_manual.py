@@ -52,6 +52,10 @@ def apply_one(cd, points_path, state, force=False):
         raise Rejected("쓸 수 있는 기준점이 없음(.points 에 켜 둔 점이 없음)")
     k = req["png_scale"]
     png_w = req["page_size_hw"][1] * k
+    rot = req.get("georef_rot") or 0
+    if rot and req.get("georef_orig_wh"):     # 북쪽이 위가 되게 돌려 만든 도면에서 찍은 점 -> 원래 그림 좌표
+        wo, ho = req["georef_orig_wh"]
+        pts = [(*manual.rot_to_orig(rot, sx, sy, wo, ho), X, Y) for sx, sy, X, Y in pts]
     problems = []
     if len(pts) >= 2:
         far = max(math.hypot(a[0] - b[0], a[1] - b[1]) for a in pts for b in pts)
