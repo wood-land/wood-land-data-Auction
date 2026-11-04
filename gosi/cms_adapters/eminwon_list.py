@@ -200,12 +200,20 @@ class _LegacyTLSAdapter(HTTPAdapter):
 # 거는 게 아니라 무조건 마운트한다(다운로드 서버 호스트는 목록 사이트와 다를 수 있다).
 # 청주시 첨부 다운로드 서버(eminwon.cheongju.go.kr)도 같다(실측 2026-10-17: 기본 설정은 SSLV3_ALERT_HANDSHAKE_FAILURE,
 # SECLEVEL=1 이면 HTTP 200). 이 때문에 청주시 첨부가 '형식 불일치(UNSUPPORTED)'로 기록되던 문제의 마지막 원인이었다.
-_SECLEVEL_HOSTS = {"www.gn.go.kr", "eminwon.uiseong.go.kr", "eminwon.cheongju.go.kr"}
+# 구리시 첨부 다운로드 서버(eminwon.guri.go.kr)도 같다(실측 2026-11-04: 기본 설정은 SSLEOFError(UNEXPECTED_EOF_WHILE_READING),
+# SECLEVEL=1 이면 HTTP 응답). 2026-11-02 경기 수집에서 구리시 첨부 3건이 DL_FAIL 로 기록된 원인.
+_SECLEVEL_HOSTS = {"www.gn.go.kr", "eminwon.uiseong.go.kr", "eminwon.cheongju.go.kr", "eminwon.guri.go.kr"}
 
 # 강릉시 첨부 다운로드 서버(eminwon.gangneung.go.kr)는 영암군과 같은 중간 인증서(Sectigo Public Server Authentication CA DV R36)를
 # 서버가 보내지 않는다(실측 2026-10-17: unable to get local issuer certificate). 발급기관 공개 인증서(AIA caIssuers)를 채워
 # 검증은 그대로 켜 둔 채 체인만 완성한다. 목록 사이트와 호스트가 달라 base_url 과 무관하게 마운트한다.
-_DOWNLOAD_SERVER_CA_HOSTS = {"eminwon.gangneung.go.kr": _YEONGAM_INTERMEDIATE_PEM}
+# 남양주시 첨부 다운로드 서버(eminwon.nyj.go.kr)도 같은 중간 인증서(Sectigo R36)를 보내지 않는다(실측 2026-11-04:
+# unable to get local issuer certificate, 인증서 발급자 CN=Sectigo Public Server Authentication CA DV R36).
+# 2026-11-02 경기 수집에서 남양주시 첨부 150건이 SSLError 로 DL_FAIL 이던 원인.
+_DOWNLOAD_SERVER_CA_HOSTS = {
+    "eminwon.gangneung.go.kr": _YEONGAM_INTERMEDIATE_PEM,
+    "eminwon.nyj.go.kr": _YEONGAM_INTERMEDIATE_PEM,
+}
 
 
 def prepare_session(session, city):
