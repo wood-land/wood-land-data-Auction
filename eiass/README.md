@@ -49,8 +49,8 @@ EIASS 평가정보조회(`/biz/base/info/perList.do`, 소규모 = biz_gubn=M)의
 사용자가 하는 일은 **PNG 열기 -> 점 찍기 -> `.points` 올리기** 셋뿐이고, 나머지는 자동이다.
 1. **요청(자동)**: 자동 정합에 실패하면 `figures/georef/{코드}_{대표지번}_site.png`(사업지만 오려낸 그림, 바깥은 투명, **파일 이름에 대표 지번**)와 `figures/{코드}_review.png`(도면 쪽 전체)·`_review.json`(오려낸 위치 오프셋·쪽 px 배율·자동 경계 윤곽·대략 위치)이 만들어지고, 사업마다 GitHub 이슈가 열린다(PNG 링크·요령 포함).
 2. **점 찍기(사람)**: 파일 이름의 대표 지번을 지도에서 찾아 위치를 파악한 뒤, QGIS 지리참조자에 **오려낸 `_site.png`** 를 올리고(쪽 전체 `_review.png` 로 찍었다면 `run_manual.py --full`) 좌표계를 EPSG:5186 으로 한다. 기준점 **2점 이상**(도로 교차점·시설 모서리 등)을 도면 **양끝 쪽으로 멀리** 찍는다. 변환 실행·tif 출력은 필요 없고 **GCP 점만 저장**(.points)한다.
-3. **올리기(사람)**: `.points` 를 DB 저장소 `eiass/manual/{코드}.points` 로 올린다(GitHub 웹 Add file, 또는 PC 에서 커밋·푸시).
-4. **반영(자동)**: Actions·PC 수집(`run_pc.py`)이 매 실행 처음에 `python run_manual.py` 를 돈다(손으로 `python run_manual.py 사업코드` 도 된다).
+3. **반영(사람, 더블클릭 한 번)**: 저장소 최상위 **`★지리참조_반영_더블클릭.bat`**(`eiass/run_georef.py`)을 실행한다. QGIS 가 그림 옆에 저장한 `figures/georef/{코드}_…_site.png.points` 를 자동으로 찾아 가져오므로 **이름을 바꾸거나 옮길 필요가 없다**. DB 받기 -> 4번 반영 -> DB `eiass/` 커밋·푸시까지 한 번에 한다.
+4. **반영 내용**(`run_manual.py`, Actions·PC 수집 `run_pc.py` 도 매 실행 처음에 돈다; `manual/{코드}.points` 로 직접 올려도 된다):
    - 검증: 점이 2개 이상이면 가장 먼 두 점 거리가 PNG 폭의 1/3 이상, 잔차 15 m 이하, 경계 면적이 계획면적과 ±10 % 이내.
    - 통과: 닮음변환(2점) / 최소제곱 닮음변환(3점 이상)으로 경계·PNU·미리보기·`figures/{코드}_site.png` 를 만들고 등급 C, `manual=True`, 상태 ok. `.points` 는 `manual/done/` 으로 옮겨 보관(다시 처리하지 않음), `review/`·대략위치 원은 지워지고 이슈는 다음 알림 단계에서 닫힌다.
    - 실패: 확정하지 않고 사유를 `state.json` 의 `manual_fail` 에 적어 이슈에 댓글로 남긴다. 같은 `.points` 는 다시 처리하지 않으며, 점을 고쳐 다시 올리면(내용이 바뀌면) 다시 처리한다. 경고를 알고도 확정하려면 `--force`.

@@ -124,6 +124,24 @@ def apply_one(cd, points_path, state, force=False, full=False):
     print(f"  저장: 필지 {len(rows)}건")
 
 
+def import_georef_points():
+    """QGIS 지리참조자가 오려낸 그림 옆에 저장한 'figures/georef/{코드}_..._site.png.points' 를 manual/{코드}.points 로 가져온다.
+    사람이 이름을 바꿔 옮기지 않아도 된다. 이미 처리해 보관한(같은 내용) 점은 건너뛰고, 원본은 지울 수 있으면 지운다."""
+    gdir = store.DATA / "figures" / "georef"
+    mdir = store.DATA / "manual"
+    n = 0
+    for src in sorted(gdir.glob("*_site.png.points")):
+        cd = src.name.split("_")[0]
+        done = mdir / "done" / f"{cd}.points"
+        if done.exists() and file_hash(done) == file_hash(src):
+            continue
+        mdir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, mdir / f"{cd}.points")
+        print(f"  기준점 가져옴: {src.name} -> manual/{cd}.points")
+        n += 1
+    return n
+
+
 def archive_points(cd, points_path):
     """확정한 .points 를 manual/done/ 으로 옮겨 다시 처리하지 않게 하고, 나중에 같은 결과를 다시 만들 수 있게 보관한다."""
     done = store.DATA / "manual" / "done"
@@ -154,6 +172,7 @@ def main():
     store.ensure_dirs()
     state = store.load_state()
     mdir = store.DATA / "manual"
+    import_georef_points()
     codes = a.codes or [p.stem for p in sorted(mdir.glob("*.points"))]
     if not codes:
         print("처리할 기준점 파일이 없음 (eiass/manual/{코드}.points)"); return 0
