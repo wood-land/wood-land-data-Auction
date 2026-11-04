@@ -70,6 +70,7 @@ def _main(no_git, rec):
         git(db, "pull", "--rebase", "--autostash")
         rec["heads"] = {"code": _head(HERE.parent), "db": _head(db)}
     rec["stage"] = "collect"
+    subprocess.call([sys.executable, str(HERE / "run_manual.py")], cwd=HERE)   # 사람이 올린 기준점(.points) 먼저 반영(없으면 바로 끝남)
     rc = subprocess.call([sys.executable, str(HERE / "run_eiass.py"), "--pages", "3", "--retry-review"], cwd=HERE)
     subprocess.call([sys.executable, str(HERE / "run_perss.py")], cwd=HERE)   # 소규모환경영향평가 대략위치(실패해도 환경영향평가 결과는 그대로)
     rec["regions"]["eiass"] = {"status": "ok" if rc == 0 else f"exit {rc}"}

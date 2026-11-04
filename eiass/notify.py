@@ -71,15 +71,27 @@ def main():
                     f"확인 자료(비공개 DB 저장소): [{cd}.jpg]({DB_URL}/review/{cd}.jpg) · [{cd}.json]({DB_URL}/review/{cd}.json)\n"
                     f"EIASS 초안공람: {EIASS_URL}\n\n"
                     f"**지리참조 요청**: 도면 PNG [{cd}_review.png]({DB_URL}/figures/{cd}_review.png) 를 QGIS 지리참조자에 올려 "
-                    f"기준점(도로 교차점·시설 모서리 등)을 **2점 이상** 찍고, GCP 점을 `eiass/manual/{cd}.points` 로 저장해 주세요. "
-                    f"그다음 `python run_manual.py {cd}` 를 실행하면 경계·PNU 가 만들어집니다(등급 C). 요청 정보: `figures/{cd}_review.json`.\n"
-                    f"(경계를 직접 맞췄다면 `eiass/projects/{cd}.geojson` 을 넣어도 됩니다. 공람이 끝나기 전에 처리해야 평가서를 볼 수 있습니다.)")
+                    f"기준점(도로 교차점·시설 모서리 등, 서로 멀리 떨어진 곳)을 **2점 이상** 찍고(좌표계 EPSG:5186), "
+                    f"**GCP 점만 저장**(.points)해 `eiass/manual/{cd}.points` 로 DB 저장소에 올려 주세요(GitHub 웹 Add file 도 됩니다). "
+                    f"다음 자동 실행 때 `run_manual.py` 가 검증(점 간격·잔차 15m·면적 ±10%)하고 통과하면 경계·PNU 를 만들어 이 이슈를 닫습니다(등급 C). "
+                    f"통과하지 못하면 이 이슈에 사유를 댓글로 남깁니다. 요청 정보: `figures/{cd}_review.json`.\n"
+                    f"(경계를 직접 그렸다면 `eiass/projects/{cd}.geojson` 을 넣어도 됩니다. 공람이 끝나기 전에 처리해야 평가서를 볼 수 있습니다.)")
             v["issue"] = create(f"[eiass 확인필요] {cd} {v.get('biz_nm','')}"[:120], body)
             print(f"이슈 생성 #{v['issue']} {cd}"); changed = True
         elif num and not need_human:
             why = {"ok": "완료되어", "skip": "자동 추출 대상이 아니거나 공람이 끝나(파일 비공개)"}.get(v.get("status"), f"상태가 {v.get('status')}(으)로 바뀌어")
             update(num, state="closed", comment=f"{why} 닫습니다. ({v.get('note','')})")
             print(f"이슈 닫음 #{num} {cd}"); v["issue"] = None; changed = True
+    # 사람이 올린 기준점(.points)을 run_manual.py 가 검증하다 실패한 사업: 사유를 이슈에 한 번 댓글로 남긴다
+    for cd, v in st.items():
+        if not isinstance(v, dict) or cd.startswith("_"):
+            continue
+        mf = v.get("manual_fail")
+        if mf and v.get("issue") and not mf.get("commented") and v.get("status") == "review":
+            update(v["issue"], comment=f"올려 주신 기준점으로는 확정하지 못했습니다.\n\n- 사유: {mf.get('reason', '')}\n\n"
+                                       f"점을 고쳐 `eiass/manual/{cd}.points` 를 다시 올려 주세요(내용이 바뀌면 다음 실행에서 다시 처리합니다).")
+            mf["commented"] = True; changed = True
+            print(f"이슈 댓글 #{v['issue']} {cd} (기준점 실패)")
     # PC 대기 중 공람 마감 임박
     pend = []
     for cd, v in st.items():

@@ -77,6 +77,11 @@ jobs:
         continue-on-error: true
         run: python diag.py
 
+      - name: 사람이 올린 기준점(.points) 반영 (run_manual.py)
+        if: github.event.inputs.mode != 'diag' && github.event.inputs.test != 'true'
+        continue-on-error: true
+        run: python run_manual.py
+
       - name: 초안공람 사업지구 추출
         if: github.event.inputs.mode != 'diag'
         env:
