@@ -14,7 +14,15 @@ import csv
 import json
 import os
 import sqlite3
+import sys
 from pathlib import Path
+
+# 한글 Windows 콘솔(cp949)에서   같은 문자를 출력하다 멈추지 않게 한다(소재지 글에 자주 섞여 있다)
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 ROOT = Path(__file__).resolve().parents[1]
 
