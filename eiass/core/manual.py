@@ -8,6 +8,7 @@ core/manual.py - 자동으로 못 맞춘 사업을 사람이 지리참조자로 
 import json
 import math
 import re
+from pathlib import Path
 
 import numpy as np
 
@@ -26,7 +27,8 @@ def write_request(data_dir, cd, meta, k, page, contour, plan, lonlat, size):
 def parse_points(path):
     """QGIS 지리참조자 .points -> (crs 문구, [(sx, sy_png, X, Y)]). sourceY 는 위로 갈수록 +(이미지 좌표의 음수)로 저장된다."""
     crs, pts = "", []
-    for ln in open(path, encoding="utf-8").read().splitlines():
+    # QGIS 가 좌표계 문구에 cp949 문자(예: 도 기호)를 섞어 저장하기도 해서 utf-8 로 못 읽는 바이트는 대체한다(좌표 숫자는 영향 없음)
+    for ln in Path(path).read_bytes().decode("utf-8", errors="replace").splitlines():
         ln = ln.strip()
         if not ln:
             continue

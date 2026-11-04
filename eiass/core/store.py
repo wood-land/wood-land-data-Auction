@@ -180,9 +180,12 @@ def write_approx(biz_cd, meta, lon, lat, how, plan_m2, parcel_geom4326=None, rou
 
 def clear_georef_request(biz_cd):
     """확정된 사업의 지리참조 요청 꾸러미(도면 PNG·오려낸 그림)를 지운다. _site.png(결과)는 남긴다."""
-    (DATA / "figures" / f"{biz_cd}_review.png").unlink(missing_ok=True)
-    for f in (DATA / "figures" / "georef").glob(f"{biz_cd}_*_site.png"):
-        f.unlink()
+    paths = [DATA / "figures" / f"{biz_cd}_review.png", *(DATA / "figures" / "georef").glob(f"{biz_cd}_*_site.png")]
+    for f in paths:
+        try:
+            f.unlink(missing_ok=True)
+        except OSError as e:      # QGIS 가 열어 둔 파일은 Windows 에서 지울 수 없다 - 확정은 그대로 두고 나중에 지우게 알린다
+            print(f"  (참고) 지우지 못함, QGIS 에서 레이어를 닫은 뒤 직접 지우세요: {f.name} ({e.__class__.__name__})")
 
 
 def clear_approx(biz_cd):
