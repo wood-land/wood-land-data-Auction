@@ -125,7 +125,7 @@ def apply_one(cd, points_path, state, force=False):
     print(f"  저장: 필지 {len(rows)}건")
 
 
-def import_georef_points():
+def import_georef_points(state=None):
     """QGIS 지리참조자가 전체 도면 옆에 저장한 'check Plz/{코드}_..._도면.png.points' 를 manual/{코드}.points 로 가져온다.
     사람이 이름을 바꿔 옮기지 않아도 된다. 이미 처리해 보관한(같은 내용) 점은 건너뛰고, 원본은 지울 수 있으면 지운다."""
     gdir = store.DATA / store.CHECK_DIR
@@ -133,6 +133,8 @@ def import_georef_points():
     n = 0
     for src in sorted(gdir.glob("*_도면.png.points")):
         cd = src.name.split("_")[0]
+        if state and (state.get(cd) or {}).get("status") in ("ok", "skip"):
+            continue                          # 이미 확정·제외된 사업의 남은 점(sweep_check_dir 이 지운다)
         done = mdir / "done" / f"{cd}.points"
         if done.exists() and file_hash(done) == file_hash(src):
             continue
@@ -172,6 +174,26 @@ def dismiss_removed(state):
     return gone
 
 
+def sweep_check_dir(state):
+    """check Plz 에는 '지금 사람이 해야 할 사업'(검토대기)의 파일만 남긴다. 확정(ok)·제외(skip)된 사업의 파일(도면·QGIS 가 만든 .points·_modified.tif·.aux.xml)은 지운다.
+    QGIS 가 열어 둔 파일은 지울 수 없으니 건너뛰고 다음 실행에서 다시 지운다. 지운 파일 수를 돌려준다."""
+    import re
+    cdir = store.DATA / store.CHECK_DIR
+    n = 0
+    for f in sorted(cdir.glob("*")) if cdir.exists() else []:
+        m = re.match(r"^([A-Za-z]{2}\d{4}[A-Za-z]\d{3})_", f.name)
+        if not m or not f.is_file():
+            continue
+        v = state.get(m.group(1))
+        if isinstance(v, dict) and v.get("status") in ("ok", "skip"):
+            try:
+                f.unlink()
+                n += 1
+            except OSError:
+                pass            # QGIS 가 열어 둠 - 다음에
+    return n
+
+
 def archive_points(cd, points_path):
     """확정한 .points 를 manual/done/ 으로 옮겨 다시 처리하지 않게 하고, 나중에 같은 결과를 다시 만들 수 있게 보관한다."""
     done = store.DATA / "manual" / "done"
@@ -201,12 +223,15 @@ def main():
     store.ensure_dirs()
     state = store.load_state()
     mdir = store.DATA / "manual"
-    import_georef_points()
+    import_georef_points(state)
     dismissed = [] if a.codes else dismiss_removed(state)
     if dismissed:
         store.save_state(state)
     codes = a.codes or [p.stem for p in sorted(mdir.glob("*.points"))]
     if not codes:
+        swept = sweep_check_dir(state)
+        if swept:
+            print(f"check Plz 정리: 처리 끝난 사업의 파일 {swept}개 삭제")
         if dismissed:
             print(f"레이어 사업지구 {store.rebuild_gpkg()}건")
         else:
@@ -236,6 +261,9 @@ def main():
                                                        "date": R.TODAY, "commented": False}
             n_fail += 1
         store.save_state(state)
+    swept = sweep_check_dir(state)
+    if swept:
+        print(f"check Plz 정리: 처리 끝난 사업의 파일 {swept}개 삭제")
     n = store.rebuild_gpkg() if (n_ok or dismissed) else None
     print(f"\n요약 확정 {n_ok} / 확정 안 함 {n_fail} / 이미 실패한 점 {n_skip}" + (f" / 레이어 사업지구 {n}건" if n is not None else ""))
     return 0

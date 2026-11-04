@@ -55,6 +55,7 @@ EIASS 평가정보조회(`/biz/base/info/perList.do`, 소규모 = biz_gubn=M)의
    - 통과: 닮음변환(2점) / 최소제곱 닮음변환(3점 이상)으로 경계·PNU·미리보기·사업지만 오린 투명 PNG `figures/{코드}_site.png`(+`.pgw`,`.prj`)를 만들고 등급 C, `manual=True`, 상태 ok. `.points` 는 `manual/done/` 으로 옮겨 보관(다시 처리하지 않음), `review/`·대략위치 원은 지워지고 이슈는 다음 알림 단계에서 닫힌다.
    - 실패: 확정하지 않고 사유를 `state.json` 의 `manual_fail` 에 적어 이슈에 댓글로 남긴다. 같은 `.points` 는 다시 처리하지 않으며, 점을 고쳐 다시 올리면(내용이 바뀌면) 다시 처리한다. 경고를 알고도 확정하려면 `--force`.
 5. 점이 1개면 계획면적에서 구한 축척·회전 0 으로 맞춘다(정확도는 낮음).
+   `check Plz/` 에는 **지금 사람이 해야 할 사업(검토대기)의 도면만** 남는다. 확정·제외된 사업의 파일(도면, QGIS 가 만든 `.points`·`_modified.tif`·`.aux.xml`)은 `run_manual.py` 가 지운다(QGIS 가 열어 둔 파일은 다음 실행에서). 확정한 점은 `manual/done/` 에 보관된다.
 6. **검토할 가치가 없는 사업**: `check Plz/` 에서 그 `_도면.png` 를 **지우기만 하면** 된다. 다음 실행(`run_manual.py`)이 '요청 도면이 만들어진 적이 있는데 파일이 없는 검토대기 사업'을 찾아 상태를 skip(검토 제외, `dismissed`)으로 바꾸고, **대략위치 원·요청 파일(review/·figures/)을 모두 지워 gpkg 에서도 빠지며** 이슈를 닫는다. 이미 `.points` 를 올린 사업은 건드리지 않는다. 되살리려면 `python run_eiass.py --codes 사업코드:순번 --force`.
 도면에서 경계 윤곽을 못 찾은 사업은 이 방법을 못 쓰므로 아래처럼 경계를 직접 그려 넣는다.
 
