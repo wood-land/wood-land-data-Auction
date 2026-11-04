@@ -223,6 +223,48 @@ class RunLog:
             json.loads(raw), scopes=["https://www.googleapis.com/auth/spreadsheets"])
         return AuthorizedSession(creds), sheet_id
 
+    @staticmethod
+    def _update_index(sess, base):
+        """맨 앞 시트(보통 '시트1')를 목차로 쓴다: 지역·시트종류별 바로가기 링크와 현재 행수.
+        여러 지역 job 이 동시에 돌아도 매번 전체 시트 목록을 다시 읽어 통째로 쓰므로 마지막 쓴 쪽이 전체 목록을 갖는다.
+        실패해도 수집에는 영향이 없다(호출부의 try 에서 경고만 남긴다)."""
+        meta = sess.get(base, params={"fields": "sheets.properties(sheetId,title,index)"}, timeout=30)
+        meta.raise_for_status()
+        props = sorted((x["properties"] for x in meta.json().get("sheets", [])), key=lambda p: p["index"])
+        if not props:
+            return
+        first = props[0]
+        kinds = list(SHEETS)
+        if any(first["title"].endswith("_" + k) for k in kinds):
+            return  # 맨 앞이 로그 탭이면(목차용 빈 시트가 없으면) 로그를 덮어쓰지 않는다
+        rows = []
+        for pr in props[1:]:
+            title = pr["title"]
+            region, _, kind = title.rpartition("_")
+            if kind not in kinds:
+                continue  # news_ 등 다른 용도의 탭은 목차에서 뺀다
+            safe = title.replace('"', '""')
+            q = title.replace("'", "''")
+            rows.append((region, kinds.index(kind), [
+                region, kind,
+                f'=HYPERLINK("#gid={pr["sheetId"]}","{safe}")',
+                f"=COUNTA('{q}'!A:A)-1",
+            ]))
+        rows.sort(key=lambda t: (t[0], t[1]))
+        values = [["지역", "시트", "바로가기(클릭)", "행수"]] + [r[2] for r in rows]
+        tab = first["title"].replace("'", "''")
+        sess.post(f"{base}/values/'{tab}'!A:D:clear", timeout=30, json={}).raise_for_status()
+        sess.put(f"{base}/values/'{tab}'!A1", params={"valueInputOption": "USER_ENTERED"}, timeout=30,
+                 json={"values": values}).raise_for_status()
+        sess.post(f"{base}:batchUpdate", timeout=30, json={"requests": [
+            {"repeatCell": {"range": {"sheetId": first["sheetId"], "startRowIndex": 0, "endRowIndex": 1},
+                            "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+                            "fields": "userEnteredFormat.textFormat.bold"}},
+            {"updateSheetProperties": {"properties": {"sheetId": first["sheetId"],
+                                                      "gridProperties": {"frozenRowCount": 1}},
+                                       "fields": "gridProperties.frozenRowCount"}}]}).raise_for_status()
+        print(f"[수집로그] 목차 시트 '{first['title']}' 갱신 {len(rows)}개 탭")
+
     def flush_sheets(self):
         """이번 실행 기록을 구글시트 탭('{지역}_{시트명}')에 이어 붙인다. 실패해도 예외를 던지지 않는다."""
         self.enrich_network()
@@ -257,6 +299,7 @@ class RunLog:
                     r.raise_for_status()
                 sent[tab] = len(rows)
             print(f"[수집로그] 구글시트 저장 {sent}")
+            self._update_index(sess, base)
         except Exception as e:  # 시트 때문에 수집이 멈추면 안 된다
             print(f"[경고] 구글시트 로그 저장 실패: {type(e).__name__}: {str(e)[:200]}")
 
