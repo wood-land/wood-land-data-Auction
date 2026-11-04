@@ -94,8 +94,14 @@ jobs:
           cache: pip
           cache-dependency-path: gosi/requirements.txt
 
+      # 미러가 멈추면 이 단계가 몇 시간씩 걸려(2026-11-01 대구: 340분 취소) 수집이 통째로 날아갔다. 10분으로 끊고, 실패해도 계속한다 —
+      # OCR 은 스캔본 PDF 에만 쓰이고 없으면 gazette_extractor.ocr_available() 가 False 가 되어 그 문서만 건너뛴다.
       - name: Install tesseract (OCR, kor)
-        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-kor
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y tesseract-ocr tesseract-ocr-kor
 
       - run: pip install -r requirements.txt
 
@@ -114,8 +120,11 @@ jobs:
       # --blocked skip: 이 러너(미국 IP)에서 막히는 게시판(core/blocked_sites.py)은 건너뛴다. 그곳은 국내 IP PC 의 '★PC수집_…_더블클릭_v….bat' 이 수집한다.
       # --preflight: 시작 전에 이 러너 IP 가 지역 사이트들에 닿는지 본다. 대부분 안 닿으면(2026-10-23: 러너 한 대가 전남 25곳 전부 막힘) 수집하지 않고 종료코드 75 로 끝나,
       # 아래 'Retry' 단계가 같은 지역을 새 러너(다른 IP)로 다시 실행한다. 세 번째 시도부터는 점검 없이 그대로 수집해 오류 로그를 남긴다.
+      # 한 게시판이 멈추면(2026-11-01 충남 서산시) 작업 전체 제한(340분)에 걸려 취소되고 뒤 단계(저장)까지 못 돈다.
+      # 이 단계만 먼저 끊어 두면 'Commit SQLite'(if: always())가 그때까지 모은 DB 를 저장할 시간이 남는다.
       - name: Collect ${{ matrix.region }} -> SQLite
         id: collect
+        timeout-minutes: 315
         env:
           PYTHONIOENCODING: utf-8
           ATTEMPT: ${{ github.event.inputs.attempt }}
