@@ -5,6 +5,7 @@ run_manual.py - 사람이 지리참조자로 찍은 기준점(.points)으로 검
   python run_manual.py ND2026D003                   # DB 저장소 eiass/manual/ND2026D003.points 사용
   python run_manual.py ND2026D003 --points 경로.points
   python run_manual.py ND2026D003 --force           # 경고(잔차·면적차·점 간격)를 무시하고 확정
+  python run_manual.py HG2026L002 --dismiss         # 검토할 가치가 없는 사업 제외(도면 파일이 없는 사업용. 도면이 있으면 check Plz 에서 파일을 지우면 된다)
 
 요청 꾸러미: figures/{코드}_review.png (+ _review.json). 기준점은 이 PNG 위에서 찍어야 한다.
 처리 순서: 점 읽기 -> 검증 -> 닮음변환 맞춤 -> 경계·필지·미리보기·투명 PNG 저장 -> 상태 ok(등급 C) -> .points 를 manual/done/ 으로 보관.
@@ -164,14 +165,19 @@ def dismiss_removed(state):
             continue
         if list(cdir.glob(f"{cd}_*.points")) or (store.DATA / "manual" / f"{cd}.points").exists():
             continue
-        v.update({"status": "skip", "need": None, "dismissed": True, "date": R.TODAY,
-                  "note": "사람이 검토 제외함(check Plz 에서 도면 파일을 지움)"})
-        store.clear_approx(cd)
-        for f in list((store.DATA / "review").glob(f"{cd}.*")) + [rp, store.DATA / "figures" / f"{cd}_review.png"]:
-            f.unlink(missing_ok=True)
-        print(f"  {cd}: 검토 제외(도면 파일을 지움) - 대략위치 원·요청 파일 삭제")
+        dismiss_one(state, cd, "사람이 검토 제외함(check Plz 에서 도면 파일을 지움)")
         gone.append(cd)
     return gone
+
+
+def dismiss_one(state, cd, note):
+    """검토대기 사업 하나를 제외(skip)로 하고 대략위치 원·요청 꾸러미·검토 파일을 모두 지운다."""
+    v = state.setdefault(cd, {})
+    v.update({"status": "skip", "need": None, "dismissed": True, "date": R.TODAY, "note": note})
+    store.clear_approx(cd)
+    for f in list((store.DATA / "review").glob(f"{cd}.*")) + [store.DATA / "figures" / f"{cd}_review.json", store.DATA / "figures" / f"{cd}_review.png"]:
+        f.unlink(missing_ok=True)
+    print(f"  {cd}: 검토 제외 - 대략위치 원·요청 파일 삭제")
 
 
 def sweep_check_dir(state):
@@ -218,11 +224,21 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("codes", nargs="*")
     ap.add_argument("--points", default="")
+    ap.add_argument("--dismiss", action="store_true", help="코드로 지정한 검토대기 사업을 검토 제외(대략위치 원·요청 파일 삭제, gpkg 에서 제외). 도면 파일이 없는 사업용")
     ap.add_argument("--force", action="store_true", help="검증 경고(잔차·면적차·점 간격)를 무시하고 확정")
     a = ap.parse_args()
     store.ensure_dirs()
     state = store.load_state()
     mdir = store.DATA / "manual"
+    if a.dismiss:
+        done_ = []
+        for cd in a.codes:
+            if (state.get(cd) or {}).get("status") != "review":
+                print(f"{cd}: 검토대기 사업이 아니라 건너뜀"); continue
+            dismiss_one(state, cd, "사람이 검토 제외함(run_manual.py --dismiss)"); done_.append(cd)
+        store.save_state(state)
+        print(f"레이어 사업지구 {store.rebuild_gpkg()}건" if done_ else "제외한 사업 없음")
+        return 0
     import_georef_points(state)
     dismissed = [] if a.codes else dismiss_removed(state)
     if dismissed:
