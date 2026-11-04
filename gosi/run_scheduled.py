@@ -14,6 +14,7 @@ import argparse
 import os
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from collections import Counter
@@ -102,6 +103,48 @@ def board_urls(provinces, modules, cities, excel, only, region, blocked):
     return urls
 
 
+STALL_SECONDS = 300  # 지자체 하나가 이 시간(초) 동안 아무 출력·진행이 없으면 멈춘 것으로 보고 다음 지자체로 넘어간다
+
+
+class _ActivityStdout:
+    """표준출력에 뭔가 찍힐 때마다 '마지막 진행 시각'을 갱신한다(수집은 쪽/글마다 계속 출력한다)."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.last = time.time()
+
+    def write(self, text):
+        self.last = time.time()
+        return self._inner.write(text)
+
+    def flush(self):
+        return self._inner.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def run_with_stall_guard(fn, activity, stall=STALL_SECONDS):
+    """fn() 을 별도 스레드에서 돌리고 -> (끝났는지, 반환값, 예외). stall 초 동안 출력이 없으면 기다리지 않고 (False, None, None).
+    멈춘 스레드는 죽일 수 없어 데몬으로 그냥 두고(결과는 버림) 다음 지자체로 넘어간다. 다음 스케줄 실행에서 다시 수집한다."""
+    box = {}
+
+    def target():
+        try:
+            box["value"] = fn()
+        except BaseException as e:  # noqa: BLE001 - 호출한 쪽에서 다시 던진다
+            box["error"] = e
+
+    t = threading.Thread(target=target, daemon=True)
+    activity.last = time.time()
+    t.start()
+    while t.is_alive():
+        t.join(5)
+        if t.is_alive() and time.time() - activity.last > stall:
+            return False, None, None
+    return True, box.get("value"), box.get("error")
+
+
 def job_gosigongo(con, days, delay, provinces, cities, region=None, blocked="all", reread=False):
     started = S.now()
     P = discover_provinces()
@@ -109,6 +152,8 @@ def job_gosigongo(con, days, delay, provinces, cities, region=None, blocked="all
     tmp = Path(tempfile.mkdtemp(prefix="gosigongo_"))
     resolver = PnuResolver(con)
     total, new_parcels, dropped, failed = 0, 0, 0, []
+    activity = _ActivityStdout(sys.stdout)
+    sys.stdout = activity
     for name in wanted:
         if name not in P:
             print(f"[건너뜀] 알 수 없는 도: {name}")
@@ -122,8 +167,18 @@ def job_gosigongo(con, days, delay, provinces, cities, region=None, blocked="all
             try:
                 sink, outcomes = [], []
                 seen = set() if reread else S.load_seen(con, "고시공고", city.city)  # 지난 실행에서 끝낸 글은 다시 받지 않는다
-                records = run_city(city, days=days, output_dir=tmp, dry_run=False, delay=delay, jose_sink=sink,
-                                   skip_keys=seen, outcomes=outcomes)
+                done, records, err = run_with_stall_guard(
+                    lambda: run_city(city, days=days, output_dir=tmp, dry_run=False, delay=delay, jose_sink=sink,
+                                     skip_keys=seen, outcomes=outcomes), activity)
+                if not done:  # 멈춤: 이 지자체는 포기하고(저장·처리기록 없음) 다음 지자체로. 다음 스케줄에 다시 수집된다
+                    msg = f"{STALL_SECONDS // 60}분 넘게 진행이 없어 건너뜀(다음 스케줄에 다시 수집)"
+                    print(f"[멈춤] {name}/{city.city}: {msg}", flush=True)
+                    failed.append(f"{name}/{city.city}: 멈춤")
+                    LOG.board({"city": city.city, "kind": "고시공고", "status": "오류(멈춤)", "detail": f"{name}/{city.city} {msg}",
+                               "url": city.base_url, "errors": ["STALL"]}, "STALL")
+                    continue
+                if err is not None:
+                    raise err
                 total += len(records)
                 n, d = S.save_parcels(con, resolver, city.city, "고시공고", sink)
                 new_parcels, dropped = new_parcels + n, dropped + d
@@ -134,6 +189,7 @@ def job_gosigongo(con, days, delay, provinces, cities, region=None, blocked="all
                 LOG.board({"city": city.city, "kind": "고시공고", "status": "오류(지자체 전체)", "detail": f"{name}/{city.city} 수집 중 예외",
                            "url": city.base_url, "errors": [f"{type(e).__name__}: {str(e)[:150]}"]},
                           f"{type(e).__name__}: {str(e)[:150]}")
+    sys.stdout = activity._inner
     summary = f"고시공고 {total}건, 새 필지(PNU) {new_parcels}건, PNU 변환실패 {dropped}건, PNU {resolver.stats}, 실패 {len(failed)}곳 {failed[:20]}, {LOG.code_summary()}"
     print(summary)
     S.log_run(con, started, "gosigongo", days, summary)
