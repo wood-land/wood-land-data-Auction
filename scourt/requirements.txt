@@ -1,0 +1,10 @@
+selenium
+openpyxl
+requests
+pdfplumber
+PyPDF2
+pdf2image
+pytesseract
+Pillow
+gspread
+google-auth

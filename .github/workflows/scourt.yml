@@ -1,0 +1,74 @@
+name: scourt-bankruptcy
+
+# 대법원 회생파산 재산 매각(부동산) 공고 수집 → 구글시트('공고목록' 누적, '파산공매' 재구성, '로그기록' 실행기록)
+# 코드: scourt/crawler.py (README 참고). 결과는 이 저장소에 올리지 않고 구글시트에만 저장한다.
+# Secrets: GOOGLE_CREDENTIALS_EDITER(서비스계정 JSON), KAKAO_REST_API_KEY, VWORLD_API_KEY(보조)
+
+on:
+  schedule:
+    - cron: "0 22 * * *"   # 매일 07:00 KST
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "INCREMENTAL = 새 공고 수집 / REBUILD_MERGED = 사이트 안 가고 '파산공매'만 재구성"
+        required: false
+        default: "INCREMENTAL"
+        type: choice
+        options:
+          - INCREMENTAL
+          - REBUILD_MERGED
+      max_new:
+        description: "이번에 새로 읽을 공고 수 상한(시험용, 0 또는 비움 = 제한 없음)"
+        required: false
+        default: "0"
+
+permissions:
+  contents: read
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    concurrency:
+      group: scourt-bankruptcy
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: scourt
+
+    steps:
+      - name: 저장소 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: scourt/requirements.txt
+
+      - name: OCR 도구 설치 (tesseract 한국어, poppler)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-kor poppler-utils
+
+      - name: 패키지 설치
+        run: pip install -r requirements.txt
+
+      - name: 브라우저 설치
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: 실행
+        env:
+          GOOGLE_CREDENTIALS_EDITER: ${{ secrets.GOOGLE_CREDENTIALS_EDITER }}
+          GOOGLE_SHEET_ID: 1CCk7fK2afaSgNqTADQZlC--mxskNhhDhdWkagQ-Y5kU
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          VWORLD_API_KEY: ${{ secrets.VWORLD_API_KEY }}
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          SCOURT_RUN_MODE: ${{ github.event.inputs.mode || 'INCREMENTAL' }}
+          SCOURT_MAX_NEW: ${{ github.event.inputs.max_new || '0' }}
+          # 강제 취소(350분)되면 정리·로그가 안 남으므로 그보다 일찍 새 공고 읽기를 멈춘다
+          RUN_DEADLINE_MINUTES: "320"
+          PYTHONUNBUFFERED: "1"
+        run: python crawler.py

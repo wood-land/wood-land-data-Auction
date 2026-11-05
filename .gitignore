@@ -1,3 +1,6 @@
 # PC 수집 전용 가상환경(run_pc_all.py 가 만든다). PC 마다 따로 만들어지므로 올리지 않는다
 .venv-pc/
 __pycache__/
+
+# scourt 실행 중 생기는 작업 폴더(PDF·스냅샷)
+scourt/work/
