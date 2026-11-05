@@ -1,6 +1,6 @@
 name: scourt-bankruptcy
 
-# 대법원 회생파산 재산 매각(부동산) 공고 수집 → 구글시트('공고목록' 누적, '파산공매' 재구성, '로그기록' 실행기록)
+# 대법원 회생파산 재산 매각(부동산) 공고 수집 → 구글시트('공고목록' 누적, '파산공고_YYMMDD' 날짜 탭 재구성, '로그기록' 실행기록)
 # 코드: scourt/crawler.py (README 참고). 결과는 이 저장소에 올리지 않고 구글시트에만 저장한다.
 # Secrets: GOOGLE_CREDENTIALS_EDITER(서비스계정 JSON), KAKAO_REST_API_KEY, VWORLD_API_KEY(보조)
 
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "INCREMENTAL = 새 공고 수집 / REBUILD_MERGED = 사이트 안 가고 '파산공매'만 재구성"
+        description: "INCREMENTAL = 새 공고 수집 / REBUILD_MERGED = 사이트 안 가고 오늘 날짜 '파산공고_YYMMDD' 탭만 재구성"
         required: false
         default: "INCREMENTAL"
         type: choice

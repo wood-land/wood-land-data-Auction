@@ -3,7 +3,7 @@
 [GitHub Actions 버전] 이 파일은 로컬판 "02_201. 대법원 파산공매 _구글시트 26 0823.py"(v3.6.36)를
 Actions(리눅스·헤드리스·비밀키는 환경변수) 에서 돌도록 고친 것이다. 추출 로직은 로컬판과 같다.
   - 키/시트: GOOGLE_CREDENTIALS_EDITER(서비스계정 JSON 전체), GOOGLE_SHEET_ID, KAKAO_REST_API_KEY, VWORLD_API_KEY
-  - 시트 탭: 공고목록(원본 누적) / 파산공매(공고목록에서 매번 재구성) / 로그기록(실행 1회 1줄)
+  - 시트 탭: 공고목록(원본 누적) / 파산공고_YYMMDD(실행일 날짜 탭, 공고목록에서 매번 재구성) / 로그기록(실행 1회 1줄)
   - 러너(미국 IP)는 브이월드가 막혀 있어 PNU 는 카카오 주소검색을 먼저 쓰고 브이월드는 보조로 쓴다.
   - 환경변수: SCOURT_RUN_MODE(INCREMENTAL|REBUILD_MERGED), SCOURT_MAX_NEW(이번에 새로 읽을 공고 수 상한, 시험용),
               RUN_DEADLINE_MINUTES(이 시간이 지나면 새 공고 읽기를 멈추고 정리, 기본 300)
@@ -1850,6 +1850,29 @@ def get_known_seq_ids(gws_list) -> set:
     return known
 
 
+# ── 파산공매 결과 탭: 파산공고_YYMMDD (실행일 KST). 같은 날 다시 돌리면 같은 탭을 다시 만든다 ──
+MERGED_TAB_PREFIX = "파산공고_"
+LEGACY_MERGED_TAB = "파산공매"   # 예전 고정 이름 탭 (이전 결과 탭이 없을 때 PNU 캐시용으로만 읽음)
+
+
+def merged_tab_name(dt=None) -> str:
+    from datetime import timezone, timedelta
+    return MERGED_TAB_PREFIX + (dt or datetime.now(timezone(timedelta(hours=9)))).strftime("%y%m%d")
+
+
+def previous_merged_ws(sh, today_name: str):
+    """오늘 탭을 뺀 가장 최근 '파산공고_YYMMDD' 탭. 없으면 옛 '파산공매' 탭. 둘 다 없으면 None."""
+    try:
+        tabs = [w for w in sh.worksheets()
+                if re.fullmatch(MERGED_TAB_PREFIX + r"\d{6}", w.title.strip()) and w.title.strip() != today_name]
+        if tabs:
+            return max(tabs, key=lambda w: w.title.strip())
+        return sh.worksheet(LEGACY_MERGED_TAB)
+    except Exception:
+        return None
+
+
+
 def export_gsheet_snapshot(gsheet) -> str:
     """
     ✅ v3.5: 로컬 파일의 새로운 역할 — "그 시점 구글시트 상태를 그대로 복사한 불변 백업".
@@ -1866,7 +1889,7 @@ def export_gsheet_snapshot(gsheet) -> str:
         wb = Workbook()
         wb.remove(wb.active)
         # ✅ v3.6: '부동산목록'/'입찰일정' 탭 제거 → 스냅샷 대상도 2개로 축소
-        for tab_name in ["공고목록", "파산공매"]:
+        for tab_name in ["공고목록", merged_tab_name()]:
             try:
                 gws = gsheet.worksheet(tab_name)
                 values = gws.get_all_values()
@@ -2074,14 +2097,27 @@ def rebuild_merged_sheet(gsheet):
     '공고목록' 행을 지우고 INCREMENTAL을 다시 돌려 재수집하는 편이 안전하다.
     """
     gws_list = gsheet.worksheet(GOOGLE_SHEET_LIST_TAB)
-    gws_merged = get_or_create_gsheet_tab(gsheet, "파산공매", MERGED_HEADERS)
+    today_tab = merged_tab_name()
+    gws_merged = get_or_create_gsheet_tab(gsheet, today_tab, MERGED_HEADERS)
+    # 오늘 탭이 새로 만들어져 비어 있으면, PNU 캐시·신규여부는 이전 결과 탭에서 가져온다
+    cache_values = []
+    try:
+        cache_values = gws_merged.get_all_values()
+        if len(cache_values) < 2:
+            gws_prev = previous_merged_ws(gsheet, today_tab)
+            if gws_prev is not None:
+                cache_values = gws_prev.get_all_values()
+                print(f"   ℹ️ 캐시/신규여부 기준: 이전 탭 '{gws_prev.title}' ({len(cache_values) - 1}행)")
+    except Exception as e:
+        cache_values = []
+        print(f"   ⚠️ 이전 결과 탭 조회 실패(캐시 없이 진행): {e}")
     deungibu_cache = {}  # pdf_path -> 등기부 스캔 결과 (같은 실행 안에서 중복 OCR 방지)
 
     # ✅ 기존 '파산공매'에서 (주소 → PNU) 캐시를 먼저 확보 (지우기 전에!)
     pnu_cache = {}
     if ENABLE_PNU_LOOKUP:
         try:
-            old_values = gws_merged.get_all_values()
+            old_values = cache_values
             if len(old_values) >= 2:
                 old_headers = old_values[0]
                 if "주소" in old_headers and "pnu" in old_headers:
@@ -2097,7 +2133,7 @@ def rebuild_merged_sheet(gsheet):
     # 있던 주소 집합을 먼저 확보해둔다. 재구성 후 이 집합에 없는 주소만 "신규"로 표시한다.
     old_addr_set = set()
     try:
-        old_merged_values = gws_merged.get_all_values()
+        old_merged_values = cache_values
         if len(old_merged_values) >= 2 and "주소" in old_merged_values[0]:
             a_idx2 = old_merged_values[0].index("주소")
             for r in old_merged_values[1:]:
@@ -2366,16 +2402,16 @@ def rebuild_merged_sheet(gsheet):
         # ⚠️ 위 _ensure_header_row와 동일한 이유로 range_name=/values= 키워드로 명시 호출.
         gws_merged.update(range_name="A1", values=[MERGED_HEADERS], value_input_option="RAW")
     except Exception as e:
-        print(f"   ⚠️ '파산공매' 헤더 갱신 실패: {type(e).__name__}: {e}")
+        print(f"   ⚠️ '{today_tab}' 헤더 갱신 실패: {type(e).__name__}: {e}")
     if rows_out:
         try:
             gws_merged.append_rows(rows_out, value_input_option="RAW", table_range="A1")
         except Exception as e:
-            print(f"   ❌ '파산공매' 재작성 실패: {type(e).__name__}: {e}")
+            print(f"   ❌ '{today_tab}' 재작성 실패: {type(e).__name__}: {e}")
             return None
     pnu_idx = MERGED_COL["pnu"]
     no_pnu = sum(1 for r in rows_out if not r[pnu_idx]) if ENABLE_PNU_LOOKUP else 0
-    print(f"🔁 '파산공매' 재구성 완료: {len(rows_out)}행 (공고목록 {len(values) - 1}건 기준)"
+    print(f"🔁 '{today_tab}' 재구성 완료: {len(rows_out)}행 (공고목록 {len(values) - 1}건 기준)"
           + (f" — ⚠️ PNU 조회 실패(주소 의심) {no_pnu}건" if ENABLE_PNU_LOOKUP and no_pnu else ""))
     return {"rows": len(rows_out), "no_pnu": no_pnu, "announcements": max(len(values) - 1, 0)}
 
