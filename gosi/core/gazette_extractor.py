@@ -110,24 +110,29 @@ def ocr_available():
     return bool(TESSERACT) and os.path.exists(TESSERACT)
 
 
-def _render_pages(data, scale, max_pages):
-    """PDF -> 페이지별 PNG 바이트(흑백). pypdfium2는 잠금 안에서만 쓴다."""
+def _iter_pages(data, scale, max_pages):
+    """PDF -> 페이지별 PNG 바이트(흑백)를 한 쪽씩 내준다(전 페이지를 한꺼번에 메모리에 올리지 않는다).
+    pypdfium2는 쪽을 만들 때만 잠금 안에서 쓰고, OCR 하는 동안에는 잠금을 놓는다."""
     import pypdfium2 as pdfium
 
-    pngs = []
     with _PDFIUM_LOCK:
         pdf = pdfium.PdfDocument(data)
-        try:
-            for i in range(min(len(pdf), max_pages)):
+        n = min(len(pdf), max_pages)
+    try:
+        for i in range(n):
+            with _PDFIUM_LOCK:
                 page = pdf[i]
-                pil = page.render(scale=scale).to_pil().convert("L")
-                buf = io.BytesIO()
-                pil.save(buf, "PNG")
-                pngs.append(buf.getvalue())
-                page.close()
-        finally:
+                try:
+                    pil = page.render(scale=scale).to_pil().convert("L")
+                finally:
+                    page.close()
+            buf = io.BytesIO()
+            pil.save(buf, "PNG")
+            del pil
+            yield buf.getvalue()
+    finally:
+        with _PDFIUM_LOCK:
             pdf.close()
-    return pngs
 
 
 def _ocr_png(png, lang):
@@ -139,13 +144,28 @@ def _ocr_png(png, lang):
     return proc.stdout.decode("utf-8", "replace")
 
 
+# 스캔 PDF OCR 은 쪽당 이미지가 커서 문서 여러 개를 동시에 하면 메모리가 모자라 러너가 죽는다(2026-11-05 충북·충남 exit 137).
+# 그래서 큰 문서는 프로세스 전체에서 한 번에 하나만 처리하고, 한 문서 안에서도 OCR_AHEAD 쪽까지만 앞서 만든다.
+_BIG_DOC_LOCK = threading.Lock()
+OCR_AHEAD = 3
+
+
 def ocr_pdf_text(data, lang="kor+eng", scale=3.0, max_pages=3000):
     """스캔형 PDF -> 본문 텍스트(OCR). 테서랙트가 없으면 None. 페이지 순서를 유지해 줄바꿈으로 잇는다."""
     if not ocr_available():
         return None
-    pngs = _render_pages(data, scale, max_pages)
-    with ThreadPoolExecutor(3) as ex:
-        pages = list(ex.map(lambda b: _ocr_png(b, lang), pngs))
+    from collections import deque
+
+    pages = []
+    with _BIG_DOC_LOCK, ThreadPoolExecutor(OCR_AHEAD) as ex:
+        pending = deque()
+        for png in _iter_pages(data, scale, max_pages):
+            pending.append(ex.submit(_ocr_png, png, lang))
+            del png
+            while len(pending) >= OCR_AHEAD:  # 앞선 쪽 OCR 이 끝나야 다음 쪽 그림을 만든다
+                pages.append(pending.popleft().result())
+        while pending:
+            pages.append(pending.popleft().result())
     return "\n".join(pages)
 
 
