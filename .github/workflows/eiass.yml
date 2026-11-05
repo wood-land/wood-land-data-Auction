@@ -73,6 +73,10 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Tesseract(한글) 설치 - 지리참조용 도면의 방향(글자) 자동 판별용
+        continue-on-error: true
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-kor
+
       - name: 접속 점검 (EIASS·브이월드)
         continue-on-error: true
         run: python diag.py
