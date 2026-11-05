@@ -151,6 +151,6 @@ def make_request_image(data_dir, cd, rot=None):
     req["georef_rot"] = int(rot)
     req["georef_orig_wh"] = [int(img.shape[1]), int(img.shape[0])]
     req["how"] = ("QGIS 지리참조자에 georef_png(전체 도면, 파일 이름에 대표 지번)를 올려 기준점 2점 이상(도로 교차점·시설 모서리 등)을 찍고 "
-                  "GCP 를 저장하면 ★지리참조_반영_더블클릭.bat 이 반영한다")
+                  "GCP 를 저장하면 000_할일_바로가기/2_지리참조_반영.bat 이 반영한다")
     rp.write_text(json.dumps(req, ensure_ascii=False), encoding="utf-8")
     return out

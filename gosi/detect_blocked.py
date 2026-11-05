@@ -3,7 +3,7 @@ detect_blocked.py - 수집 로그(구글시트)에서 GitHub Actions 가 반복�
 '막힌 지자체' 후보로 알려주고, 사용자가 승인하면 등록한다(core/blocked_sites_auto.json). 등록된 곳은 Actions 가 건너뛰고(--blocked skip) PC 수집 스크립트가 맡는다.
 
   python detect_blocked.py            # 후보만 보여준다(등록 안 함)
-  python detect_blocked.py --apply    # PC 에서 접속되는 후보를 보여주고, 승인(y)하면 등록(★PC수집…bat 이 실행 때마다 이렇게 부른다)
+  python detect_blocked.py --apply    # PC 에서 접속되는 후보를 보여주고, 승인(y)하면 등록(000_할일_바로가기/1_PC수집_전체_실행.bat 이 실행 때마다 이렇게 부른다)
 
 판단 규칙(일시적인 실패를 막힌 곳으로 잘못 등록하지 않도록 보수적으로):
   1) 최근 WINDOW_DAYS 일 로그에서 연결 계열 오류(시간초과·연결 끊김·SSL·403/404/429/5xx)가 **서로 다른 날 MIN_FAIL_DAYS 번 이상**

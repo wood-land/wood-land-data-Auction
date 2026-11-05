@@ -117,7 +117,7 @@ jobs:
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
         run: test -n "$KAKAO_REST_API_KEY" || { echo "::error::Secret KAKAO_REST_API_KEY 가 없습니다(PNU 변환 불가)"; exit 1; }
 
-      # --blocked skip: 이 러너(미국 IP)에서 막히는 게시판(core/blocked_sites.py)은 건너뛴다. 그곳은 국내 IP PC 의 '★PC수집_…_더블클릭_v….bat' 이 수집한다.
+      # --blocked skip: 이 러너(미국 IP)에서 막히는 게시판(core/blocked_sites.py)은 건너뛴다. 그곳은 국내 IP PC 의 '000_할일_바로가기\1_PC수집_전체_실행.bat' 이 수집한다.
       # --preflight: 시작 전에 이 러너 IP 가 지역 사이트들에 닿는지 본다. 대부분 안 닿으면(2026-10-23: 러너 한 대가 전남 25곳 전부 막힘) 수집하지 않고 종료코드 75 로 끝나,
       # 아래 'Retry' 단계가 같은 지역을 새 러너(다른 IP)로 다시 실행한다. 세 번째 시도부터는 점검 없이 그대로 수집해 오류 로그를 남긴다.
       # 한 게시판이 멈추면(2026-11-01 충남 서산시) 작업 전체 제한(340분)에 걸려 취소되고 뒤 단계(저장)까지 못 돈다.

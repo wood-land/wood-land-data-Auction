@@ -121,5 +121,5 @@ if __name__ == "__main__":
     results.append(check_local())
     step("3) PC 이름")
     results.append(ensure_name())
-    print("\n" + ("준비 완료. ★PC수집_…bat 을 더블클릭하면 됩니다." if all(results) else "위 [없음]/[실패] 항목을 해결한 뒤 다시 실행하세요."))
+    print("\n" + ("준비 완료. 000_할일_바로가기/1_PC수집_전체_실행.bat 을 더블클릭하면 됩니다." if all(results) else "위 [없음]/[실패] 항목을 해결한 뒤 다시 실행하세요."))
     sys.exit(0 if all(results) else 1)

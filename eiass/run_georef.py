@@ -1,5 +1,5 @@
 """
-run_georef.py - QGIS 지리참조자로 저장한 기준점을 DB 에 반영하고 올린다(더블클릭용 바로가기: DB 저장소 'eiass_check plz/★지리참조_반영_더블클릭.bat').
+run_georef.py - QGIS 지리참조자로 저장한 기준점을 DB 에 반영하고 올린다(더블클릭용 바로가기: DB 저장소 'eiass_check plz/000_할일_바로가기/2_지리참조_반영.bat').
 
 사람이 하는 일은 QGIS 에서 전체 도면(eiass_check plz/{코드}_{대표지번}_도면.png)에 점을 찍고 '저장'하는 것뿐이다.
 QGIS 가 그림 옆에 만드는 '..._도면.png.points' 를 이 스크립트가 찾아서(이름 바꿀 필요 없음)
