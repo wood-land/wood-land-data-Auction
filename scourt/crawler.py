@@ -2531,7 +2531,14 @@ def main():
         except Exception as e:
             print(f"   ❌ 구글시트 '공고목록' 업로드 실패: {type(e).__name__}: {e}")
 
-    driver = build_driver()
+    try:
+        driver = build_driver()
+    except Exception as e:
+        traceback.print_exc()
+        run_stats["status"] = "오류"
+        run_stats["memo"] = f"브라우저 시작 실패 {type(e).__name__}: {str(e)[:150]}"
+        write_run_log(gsheet, run_stats)
+        return 1
     total_list = 0
     stop_all = False  # TEST_MODE 건수 한도 등, "정말 전체를 멈춰야 하는" 경우에만 True
     processed_items = 0
