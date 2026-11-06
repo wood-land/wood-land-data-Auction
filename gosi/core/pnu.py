@@ -454,6 +454,36 @@ class PnuResolver:
                 return f"{code}{'2' if want[0] else '1'}{want[1]:04d}{want[2]:04d}"
         return None
 
+    def _ri_code_by_context(self, sojaeji, jibun, context):
+        """소재지가 '시도 + 리'뿐이라 시·군·읍면이 없을 때('전남광주통합특별시 남천리'): 리 이름만으로 검색해 후보 리를 모으고,
+        게시글 제목·사업명(context)에 시·군 이름('해남 남천 등 6개 하천')이 나온 후보가 정확히 하나일 때만 리 코드로 PNU 를 조립한다.
+        그 지번이 지도 DB 에 아직 없는 분할·신규 필지일 때를 위한 것이라 verified=0(ok_ri)로 저장된다. 제목에 근거가 없으면 하지 않는다."""
+        want = parse_jibun(jibun)
+        base = re.sub(r"\s*(산)?\s*\d+(?:-\d+)?$", "", (sojaeji or "").strip())  # 저장된 소재지는 끝에 지번이 붙어 있다('… 남천리 149-3')
+        words = base.split()
+        if words and re.search(r"(특별시|광역시|특별자치시|특별자치도|도)$", words[0]):
+            words = words[1:]
+        if not want or len(words) != 1 or not re.fullmatch(r"[가-힣0-9]{1,6}리", words[0]) or not context:
+            return None
+        ri = words[0]
+        data, state = self._call(ri)
+        self.stats["api"] += 1
+        if state != "ok":
+            return None
+        found = {}
+        for d in data.get("documents", []):
+            a = d.get("address")
+            if not a or len(a.get("b_code") or "") < 10 or a.get("main_address_no") or a.get("region_3depth_name", "")[-len(ri):] != ri:
+                continue  # 리 단위 결과(번지 없음)만
+            stem = re.sub(r"(특례시|[시군구])$", "", a.get("region_2depth_name", ""))
+            if len(stem) >= 2 and stem in context:
+                found[a["b_code"][:10]] = a
+        if len(found) != 1:
+            return None
+        code, a = next(iter(found.items()))
+        self.last_full = self._full_address(a, want[0], want[1], want[2])
+        return f"{code}{'2' if want[0] else '1'}{want[1]:04d}{want[2]:04d}"
+
     def _ri_code_bare(self, sojaeji, jibun, city):
         """접미사가 빠진 리 이름('당동'=당동리, '양촌 임화'=양촌면 임화리)은 리 단위 질의를 못 만들어 리 코드 조립이 건너뛰어졌다.
         지자체(시·군) 이름을 앞에 붙이고 리·면 접미사를 채워 리 코드 조립(_from_ri_code)을 다시 시도한다. 리가 하나로 정해질 때만 인정."""
@@ -510,7 +540,8 @@ class PnuResolver:
                 return pnu, "ok_ai"
             if self._transient:
                 return None, "transient"
-        pnu = self._from_ri_code(sojaeji, jibun, city) or self._ri_code_bare(sojaeji, jibun, city)
+        pnu = (self._from_ri_code(sojaeji, jibun, city) or self._ri_code_bare(sojaeji, jibun, city)
+               or self._ri_code_by_context(sojaeji, jibun, f"{title} {project} {context}"))
         if pnu:
             self.con.execute("INSERT OR REPLACE INTO cache.pnu_cache VALUES (?,?,?,datetime('now'),?)",
                              (build_query(sojaeji, jibun), pnu, "ok_ri", self.last_full))

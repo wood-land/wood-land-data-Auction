@@ -63,6 +63,22 @@ class PnuRescue(unittest.TestCase):
         pnu, why = self.r.resolve_full("충청북도 단양군 당동", "48-7", "", "단양군", "", "", "")
         self.assertEqual((pnu, why), ("4380031023100480007", "ok_ri"))
 
+    def test_province_only_ri_uses_title_sigun_for_split_parcel(self):
+        """'전남광주통합특별시 남천리 157-3': 시·군이 없고 157-3 은 새로 분할된 지번이라 지도에 없다. 제목의 '해남'으로 리를 정해 조립한다."""
+        self.use({"남천리": [doc("전남", "영광군", "영광읍 남천리", "4686025021", 0, ri_level=True),
+                             doc("전남", "해남군", "해남읍 남천리", "4682025021", 0, ri_level=True)]})
+        pnu, why = self.r.resolve_full("전남광주통합특별시 남천리 157-3", "157-3", "해남 남천 등 6개 하천 하천구역 결정",
+                                       "전남광주통합특별시(구 전라남도청)", "해남 남천 등 6개 하천 하천구역 결정", "", "")
+        self.assertEqual((pnu, why), ("4682025021101570003", "ok_ri"))
+        self.assertIn("해남읍 남천리", self.r.last_full)
+
+    def test_province_only_ri_gives_up_without_title_evidence(self):
+        self.use({"남천리": [doc("전남", "영광군", "영광읍 남천리", "4686025021", 0, ri_level=True),
+                             doc("전남", "해남군", "해남읍 남천리", "4682025021", 0, ri_level=True)]})
+        pnu, why = self.r.resolve_full("전남광주통합특별시 남천리 157-3", "157-3", "하천구역 결정 공고",
+                                       "전남광주통합특별시(구 전라남도청)", "하천구역 결정 공고", "", "")
+        self.assertEqual((pnu, why), (None, "no_match"))
+
     def test_wrong_eup_found_by_ri_only(self):
         self.use({"안성시 개정리 350-14": [doc("경기", "안성시", "미양면 개정리", "4155034023", 350, 14)]})
         pnu, why = self.r.resolve_full("경기도 안성시 공도읍 개정리", "350-14", "", "경기도청", "", "", "")
