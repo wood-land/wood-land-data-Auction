@@ -555,9 +555,11 @@ class UnresolvedRootCauses(unittest.TestCase):
 
     def test_non_parcel_rows_and_aliases(self):
         from core import pnu as P
-        for junk in ("합 계 3", "합계(107필지) 합계( 107", "전북특별자치도 익산시 낭산면 구평리 (2필지) 3", "허가일로부터 10"):
+        for junk in ("합 계 3", "합계(107필지) 합계( 107", "전북특별자치도 익산시 낭산면 구평리 (2필지) 3", "허가일로부터 10",
+                     "○ 연 면 적 : 27", "○ 대지면적 : 944", "○ 사업계획 승인일 : 2025", "○ 총공사비 : 1", "○ 총사업비 : 6",
+                     "나) 타법 감리대상 공사비 : 1", "가) 감리대상 공사비 : 2", "사업비 750", "지역개발사업구역면적 483"):
             self.assertTrue(P.looks_like_non_parcel(junk), junk)
-        for ok in ("충청남도 공주시 유구읍 명곡리", "하빈 무등", "A1 1-4"):
+        for ok in ("충청남도 공주시 유구읍 명곡리", "하빈 무등", "A1 1-4", "경기도 김포시 사우동", "충청북도 괴산군 감물면 상미전지구"):
             self.assertFalse(P.looks_like_non_parcel(ok), ok)
         self.assertEqual(self.resolver({}).resolve_full("합 계 3", "3", city="가평군")[1], "not_parcel")
         old = P.load_aliases

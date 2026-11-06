@@ -16,7 +16,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from core.pnu import RESOLVER_VERSION
+from core.pnu import RESOLVER_VERSION, looks_like_non_parcel
 from core.run_log import LOG
 
 SCHEMA = """
@@ -302,6 +302,10 @@ def retry_unresolved(con, resolver, recheck_days=30):
     # 소재지 없이 지번만 저장돼 있던 예전 행은 추출 단계 문제였다. 다음 수집에서 문서를 다시 읽으므로 비운다.
     for rowid, soj in con.execute("SELECT rowid, sojaeji FROM parcels_unresolved WHERE resolver_version < ?", (RESOLVER_VERSION,)).fetchall():
         if not re.search(r"[가-힣]", re.sub(r"(?:^|\s)산(?=\s*\d)", " ", soj or "")):  # 지번('산13-4' 포함)뿐인 행
+            con.execute("DELETE FROM parcels_unresolved WHERE rowid=?", (rowid,))
+    # 필지가 아닌 행(○ 대지면적 : 6 같은 개요 줄)은 판별 규칙이 나중에 늘어도 바로 치운다(API 호출 없음, 재시도 주기와 무관)
+    for rowid, soj in con.execute("SELECT rowid, sojaeji FROM parcels_unresolved").fetchall():
+        if looks_like_non_parcel(soj):
             con.execute("DELETE FROM parcels_unresolved WHERE rowid=?", (rowid,))
     rows = con.execute(
         """SELECT rowid, sojaeji, jibun, jimok, area_incl, city, source_type, title, url, post_date, project_name, ocr, owner_kind
