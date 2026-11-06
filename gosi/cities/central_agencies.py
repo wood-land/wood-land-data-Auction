@@ -91,11 +91,12 @@ BUSAN_ROA = City(
 
 # ============================================================ 환경부 유역환경청 — mcee_board 어댑터
 # cms_adapters/mcee_board.py 상단 설명 참고 (2026-09-25 실측 확인).
-# www.me.go.kr URL이 mcee.go.kr로 리다이렉트되지만 requests가 자동으로 따라간다.
+# 예전 www.me.go.kr 은 mcee.go.kr 로 리다이렉트됐으나 지금은 일부 환경에서 127.0.0.1 로 풀려 접속이 거부된다(2026-11-06 PCyw 실측).
+# 그래서 처음부터 mcee.go.kr 을 직접 쓴다(경로·menuId 는 같다).
 GEUMGANG_REGION = City(
     province="환경부",
     city="금강유역환경청",
-    base_url="https://www.me.go.kr/gg/web/index.do?menuId=2283",
+    base_url="https://www.mcee.go.kr/gg/web/index.do?menuId=2283",
     boards=[{"name": "고시공고"}],
     keywords=DEFAULT_KEYWORDS,
     blacklist=DEFAULT_BLACKLIST,
@@ -106,7 +107,7 @@ GEUMGANG_REGION = City(
 HANGANG_REGION = City(
     province="환경부",
     city="한강유역환경청",
-    base_url="https://www.me.go.kr/hg/web/index.do?menuId=1255",
+    base_url="https://www.mcee.go.kr/hg/web/index.do?menuId=1255",
     boards=[{"name": "고시공고"}],
     keywords=DEFAULT_KEYWORDS,
     blacklist=DEFAULT_BLACKLIST,
@@ -117,7 +118,7 @@ HANGANG_REGION = City(
 NAKDONGGANG_REGION = City(
     province="환경부",
     city="낙동강유역환경청",
-    base_url="https://www.me.go.kr/ndg/web/index.do?menuId=3284",
+    base_url="https://www.mcee.go.kr/ndg/web/index.do?menuId=3284",
     boards=[{"name": "고시공고"}],
     keywords=DEFAULT_KEYWORDS,
     blacklist=DEFAULT_BLACKLIST,
@@ -128,7 +129,7 @@ NAKDONGGANG_REGION = City(
 YEONGSANGANG_REGION = City(
     province="환경부",
     city="영산강유역환경청",
-    base_url="https://www.me.go.kr/ysg/web/index.do?menuId=4284",
+    base_url="https://www.mcee.go.kr/ysg/web/index.do?menuId=4284",
     boards=[{"name": "고시공고"}],
     keywords=DEFAULT_KEYWORDS,
     blacklist=DEFAULT_BLACKLIST,
@@ -187,7 +188,7 @@ DIA_FACILITY = City(
     city="국방시설본부",
     base_url="https://www.dia.mil.kr/bbs/dia/72741/artclList.do",
     boards=[{"name": "공지사항"}],
-    keywords=["매입"],
+    keywords=["매입", "보상계획"],  # '매입'만으론 '[전라제주]국방·군사시설사업 보상계획 열람공고'(2026-10-14)를 놓친다(2026-11-06 실측)
     blacklist=DEFAULT_BLACKLIST,
     regions=Regions(sido_name="서울특별시", sigun_name="용산구"),
     adapter="mil_bbs_board",
@@ -201,7 +202,9 @@ MND_GOSI = City(
     city="국방부고시공고",
     base_url="https://www.mnd.go.kr/bbs/mnd/26390/artclList.do",
     boards=[{"name": "고시공고"}],
-    keywords=["매입"],
+    # '매입'만으론 토지 관련 글 30건 중 25건을 놓친다(국방·군사시설사업계획 공고/승인, '군 사용 사유재산 정리사업'; 2026-11-06 실측).
+    # 필지 목록이 없는 사업계획 글은 첨부를 읽은 뒤 NO_PARCELS 로 걸러진다.
+    keywords=["매입", "사업계획", "사유재산", "보상계획"],
     blacklist=DEFAULT_BLACKLIST,
     regions=Regions(sido_name="서울특별시", sigun_name="용산구"),
     adapter="mil_bbs_board",

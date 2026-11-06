@@ -49,14 +49,19 @@ _LIST_FILES = {}
 
 
 def _parse_date(text):
-    m = DATE_RE.search(text or "")
-    if not m:
-        return None
-    g = [x for x in m.groups() if x]
-    try:
-        return dt.date(int(g[0]), int(g[1]), int(g[2]))
-    except ValueError:
-        return None
+    """텍스트에서 게시일로 볼 첫 날짜. 게시일은 미래일 수 없으므로 오늘(+1일 여유) 이후 날짜는 건너뛴다.
+    서천군보 행은 '제1178호(2028.8.28.) … 2026-08-28' 처럼 군청이 제목에 연도를 잘못 적어, 첫 날짜를 그대로 쓰면
+    2028-08-28 이 저장돼 영영 정리되지 않았다(2026-11-06 실측). 유효한 날짜가 없으면 None."""
+    limit = dt.date.today() + dt.timedelta(days=1)
+    for m in DATE_RE.finditer(text or ""):
+        g = [x for x in m.groups() if x]
+        try:
+            d = dt.date(int(g[0]), int(g[1]), int(g[2]))
+        except ValueError:
+            continue
+        if d <= limit:
+            return d
+    return None
 
 
 _JS_FILE_PATH_RE = re.compile(r"""\(\s*['"]([^'"]+\.(?:pdf|hwpx?|docx?))['"]""", re.I)
