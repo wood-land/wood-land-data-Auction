@@ -2413,7 +2413,53 @@ def rebuild_merged_sheet(gsheet):
     no_pnu = sum(1 for r in rows_out if not r[pnu_idx]) if ENABLE_PNU_LOOKUP else 0
     print(f"🔁 '{today_tab}' 재구성 완료: {len(rows_out)}행 (공고목록 {len(values) - 1}건 기준)"
           + (f" — ⚠️ PNU 조회 실패(주소 의심) {no_pnu}건" if ENABLE_PNU_LOOKUP and no_pnu else ""))
-    return {"rows": len(rows_out), "no_pnu": no_pnu, "announcements": max(len(values) - 1, 0)}
+    deleted_old = delete_old_merged_tabs(gsheet, today_tab, len(rows_out))
+    return {"rows": len(rows_out), "no_pnu": no_pnu, "announcements": max(len(values) - 1, 0),
+            "deleted_old_tabs": deleted_old}
+
+
+def delete_old_merged_tabs(sh, today_name: str, expected_rows: int) -> int:
+    """
+    과거 날짜의 '파산공고_YYMMDD' 탭을 지운다 (최신 탭 1개만 남김).
+    ⚠️ 안전장치: 오늘 탭이 실제로 존재하고, 내용(헤더 + 데이터 행)이 방금 쓴 행 수와
+    일치하는 것을 시트에서 다시 읽어 확인한 경우에만 지운다. 하나라도 어긋나면 아무것도
+    지우지 않는다. (데이터 0행이면 확인할 내용이 없으므로 지우지 않음)
+    옛 고정 이름 '파산공매' 탭은 건드리지 않는다.
+    """
+    try:
+        if expected_rows < 1:
+            print("   ℹ️ 오늘 탭에 데이터가 없어 과거 탭 삭제를 건너뜁니다.")
+            return 0
+        pat = re.compile(MERGED_TAB_PREFIX + r"\d{6}")
+        worksheets = sh.worksheets()
+        today_ws = next((w for w in worksheets if w.title.strip() == today_name), None)
+        if today_ws is None:
+            print(f"   ⚠️ 오늘 탭 '{today_name}' 이 없어 과거 탭을 지우지 않습니다.")
+            return 0
+        values = today_ws.get_all_values()
+        data_rows = sum(1 for r in values[1:] if any(str(c).strip() for c in r))
+        def _strip_tail(lst):
+            lst = [str(c).strip() for c in lst]
+            while lst and lst[-1] == "":
+                lst.pop()
+            return lst
+        if _strip_tail(values[0] if values else []) != _strip_tail(MERGED_HEADERS) or data_rows != expected_rows:
+            print(f"   ⚠️ 오늘 탭 내용 확인 실패(데이터 {data_rows}행, 기대 {expected_rows}행) → 과거 탭을 지우지 않습니다.")
+            return 0
+        old = [w for w in worksheets
+               if pat.fullmatch(w.title.strip()) and w.title.strip() < today_name]
+        deleted = 0
+        for w in old:
+            try:
+                sh.del_worksheet(w)
+                deleted += 1
+                print(f"   🗑️ 과거 탭 삭제: '{w.title}'")
+            except Exception as e:
+                print(f"   ⚠️ '{w.title}' 삭제 실패: {type(e).__name__}: {e}")
+        return deleted
+    except Exception as e:
+        print(f"   ⚠️ 과거 탭 정리 중 오류(데이터에는 영향 없음): {type(e).__name__}: {e}")
+        return 0
 
 
 def _col_letter(headers: list, header_name: str) -> str:
