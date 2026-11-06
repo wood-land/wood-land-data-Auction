@@ -1328,6 +1328,21 @@ FORM_FILENAME_RE = re.compile(r"의견\s*(제출)?서|제출서|신청서|동의
 NON_LAND_FILENAME_RE = re.compile(r"설계\s*(설명|내역)서|내역서|입찰|견적|계약\s*(이행|조건)|과업\s*지시|시방서|공내역")
 
 
+# 지장물·물건 조서(건물·수목·시설물 목록): 토지(필지) 목록이 아니다. 본문이 '지 장 물 조 서', '물 건 의 소 재 지 … 물건명 규격(수령) 단위 수량'처럼
+# 글자 사이가 띄어 있어도 잡도록 공백을 뺀 앞부분으로 본다. 토지조서·토지의 표시가 같이 나오면 토지 문서로 본다.
+_OBJECT_SURVEY_HEAD_RE = re.compile(r"지장물조서|물건조서|물건의소재지|물건의종류|물건명규격|건물조서|수목조서")
+_LAND_SURVEY_HEAD_RE = re.compile(r"토지조서|토지의표시|토지소재지|토지의소재지")
+
+
+def is_object_survey_text(text, filename=""):
+    """지장물조서·물건조서처럼 건물·수목 목록인 문서인지(앞 600자 기준). 필지 목록이 아니라 본문 텍스트 규칙으로 읽으면
+    소유자 이름('김미란')·수목명('소나무')이 소재지('김미란면 소나무리')로 잘못 읽힌다(홍성군 가곡지구 지장물 조서 PDF, 2026-11-06 실측)."""
+    head = squash(text)[:600]
+    if _LAND_SURVEY_HEAD_RE.search(head):
+        return False
+    return bool(_OBJECT_SURVEY_HEAD_RE.search(head)) or bool(re.search(r"지장물조서|물건조서", squash(filename)))
+
+
 # 입찰·견적·제안서·용역 공고(제목 기준). 파일명에 '조서'가 있으면 토지조서일 수 있어 여기에 넣지 않는다.
 BID_TITLE_RE = re.compile(r"입찰|견적|제안서|제안\s*요청|용역|수의\s*계약|낙찰|발주|공개\s*경쟁")
 _BID_LABEL = r"(?:공\s*사\s*현\s*장|공\s*사\s*위\s*치|공\s*사\s*장\s*소|사\s*업\s*위\s*치|사\s*업\s*대\s*상\s*지|과\s*업\s*위\s*치|위\s*치|대\s*상\s*지)"
@@ -1414,6 +1429,10 @@ def extract_from_attachment(data, ext, filename, title, regions, site_name="", c
     rep["skipped_public"] = sum(int(d["heads"][0]) for d in debug if d.get("reason") == "public-owner")
     if not rows:
         text = pdf_text(data) if ext == "pdf" else (_legacy_hwp_text(data) if legacy_hwp else grids_text(grids))
+        if is_object_survey_text(text, filename):
+            # 표 해석이 0행인 지장물·물건 조서는 본문 텍스트 규칙으로 넘기지 않는다(소유자 이름·수목명이 소재지로 읽힘).
+            rep["code"], rep["detail"] = "NOT_LAND", "지장물·물건 조서(건물·수목 목록)라 필지로 읽지 않음"
+            return []
         rows = regions.rows_from_text(text)
         project = project_name_from_title(title)
         for r in rows:

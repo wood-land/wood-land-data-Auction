@@ -83,6 +83,34 @@ class ExtractionRegressions(unittest.TestCase):
         self.assertEqual({r["jibun_incl"] for r in rows}, {"275-7", "275-8"})
 
 
+class ObjectSurveyNotLand(unittest.TestCase):
+    """지장물·물건 조서(건물·수목 목록)는 필지가 아니다 — 본문 텍스트 규칙으로 읽으면 소유자 이름·수목명이 소재지가 된다(홍성군 가곡지구 실측)."""
+
+    OBJ = ("지 장 물 조 서 물 건 의 소 재 지 소 유 자 비 고 연 번 물건명 규격(수령) 단위 수 량 시 군 읍 면 리 동 분할전지번 분할후지번 주 소 성 명 "
+           "울타리 그물망 m 30 1 홍성군 갈산면 가곡리 224 224-1 홍성군 갈산면 가곡리 222 장한주 감나무 35 주 1 2")
+    LAND = "가곡지구 지구단위종합복구 사용 또는 수용할 토지조서(1) 연 번 토지소재지 지 목 지적 면적 편입 면적 소 유 자 군 면 리 지번 1 홍성 갈산 가곡 448 구"
+
+    def test_detects_object_survey_text(self):
+        self.assertTrue(J.is_object_survey_text(self.OBJ, "지장물 조서(가곡지구).pdf"))
+        self.assertTrue(J.is_object_survey_text("본문 없음", "지장물 조서(가곡지구).pdf"))  # 파일명만으로도
+        self.assertFalse(J.is_object_survey_text(self.LAND, "사용 또는 수용할토지조서(가곡지구).hwpx"))
+        self.assertFalse(J.is_object_survey_text("토지조서 및 물건조서 연번 토지소재지 지목", "조서.pdf"))  # 토지조서가 같이 있으면 토지 문서
+
+    def test_object_survey_with_no_table_rows_is_not_read_by_text_rules(self):
+        orig_grids, orig_rows, orig_pdf = J.local_grids, J.rows_from_document_grids, J.pdf_text
+        try:
+            J.local_grids = lambda ext, data: [[["x"]]]
+            J.rows_from_document_grids = lambda grids, filename, title="": ([], [])
+            J.pdf_text = lambda data: self.OBJ
+            rep = {}
+            rows = J.extract_from_attachment(b"%PDF-", "pdf", "지장물 조서(가곡지구).pdf", "보상계획 공고",
+                                             J.Regions(sido_name="충청남도", sigun_name="홍성군"), report=rep)
+        finally:
+            J.local_grids, J.rows_from_document_grids, J.pdf_text = orig_grids, orig_rows, orig_pdf
+        self.assertEqual(rows, [])
+        self.assertEqual(rep["code"], "NOT_LAND")
+
+
 class HeadingAndOwner(unittest.TestCase):
     def test_region_heading(self):
         self.assertEqual(J.region_heading("편 입 용 지 조 서\n경기도 포천시 가산면 방축리"), "경기도 포천시 가산면 방축리")
