@@ -817,6 +817,24 @@ COUNT_SHORTFALL_ABS = 3             # 최소 허용 건수
 COUNT_SHORTFALL_RATIO = 0.001       # 기준 건수의 0.1% (둘 중 큰 값)
 
 
+# (2026-11-07) 목요일 예약 실행(type_a, 약 6,700건)은 RUN_DEADLINE_MINUTES(320분) 안에 다 못 끝나는 것이 정상이다.
+# 토요일 새벽 실행(both)이 이미 저장된 물건(tid)을 건너뛰고 이어서 마무리하도록 설계돼 있는데, 목요일 실행이 '미완료'만으로 매번
+# 실패(빨간 X)가 되어 진짜 실패와 구분이 안 됐다(10-29, 11-05). 워크플로가 목요일 cron 에만 이 값을 1로 넘기면, "마감 때문에 미완료"인
+# 경우에 한해 경고로 끝낸다. 시트 합치기 실패·건수검증 실패·마감이 아닌 미완료는 그대로 실패다.
+PARTIAL_OK_IF_DEADLINE = os.environ.get("PARTIAL_OK_IF_DEADLINE", "").strip().lower() in ("1", "true", "yes")
+
+
+def run_should_fail(merge_result, count_check_ok, incomplete_notes, deadline_hit, partial_ok, safe_results):
+    """GitHub Actions 실행을 실패(exit 1)로 표시할지. 안전하지 않은 결과가 있으면 실패다. 다만 partial_ok 이고 문제가
+    '마감 도달로 인한 수집 미완료' 하나뿐이면(합치기 안전 + 건수검증 통과) 실패로 보지 않는다."""
+    unsafe = merge_result not in safe_results or not count_check_ok or bool(incomplete_notes)
+    if not unsafe:
+        return False
+    only_deadline_partial = (partial_ok and deadline_hit and bool(incomplete_notes)
+                             and merge_result in safe_results and count_check_ok)
+    return not only_deadline_partial
+
+
 def count_shortfall_tolerance(expected):
     return max(COUNT_SHORTFALL_ABS, int((expected or 0) * COUNT_SHORTFALL_RATIO))
 
@@ -1437,6 +1455,25 @@ def sync_to_google_sheet(local_sheet, ws):
         return False, None, None
 
 
+_UPDATED_RANGE_ROWS_RE = re.compile(r"!?\$?[A-Z]+\$?(\d+)(?::\$?[A-Z]+\$?(\d+))?\s*$")
+
+
+def _updated_row_span(append_response):
+    """append_rows() 응답의 updates.updatedRange("'탭'!A2:AC79")에서 실제로 쓰인 (시작행, 끝행)을 읽는다. 못 읽으면 None.
+    (2026-11-07) 로컬 엑셀에는 이번 주 탭의 기존 행(약 9천 행)이 먼저 들어 있고 임시 배치 탭에는 새 물건만 쌓이는데, 서식 적용·행 확인을
+    로컬 행 번호로 해서 배치 탭에 없는 행(Max rows: 101)을 가리켜 매번 'exceeds grid limits' 오류가 났다. 탭 쪽 실제 행 번호를 여기서 얻는다."""
+    try:
+        rng = ((append_response or {}).get("updates") or {}).get("updatedRange") or ""
+        m = _UPDATED_RANGE_ROWS_RE.search(rng)
+        if not m:
+            return None
+        start = int(m.group(1))
+        end = int(m.group(2) or m.group(1))
+        return (start, end) if end >= start else None
+    except Exception:
+        return None
+
+
 def append_new_rows_to_gsheet(local_sheet, ws, sync_state):
     """마지막 동기화 이후 새로 추가된 행만 구글 시트에 append한다.
 
@@ -1459,7 +1496,8 @@ def append_new_rows_to_gsheet(local_sheet, ws, sync_state):
 
         n_cols = max((len(r) for r in new_values), default=1)
         n_cols = max(n_cols, AC_COL)
-        needed_rows = max_row + 10
+        # 필요한 행 수는 로컬 엑셀이 아니라 이 탭(배치 탭은 새 물건만 쌓임)에 실제로 있는 행 기준으로 잡는다.
+        needed_rows = int(sync_state.get("remote_last_row") or 1) + len(new_values) + 10
         needed_cols = n_cols + 2
         if ws.row_count < needed_rows or ws.col_count < needed_cols:
             ws.resize(rows=max(ws.row_count, needed_rows), cols=max(ws.col_count, needed_cols))
@@ -1474,8 +1512,11 @@ def append_new_rows_to_gsheet(local_sheet, ws, sync_state):
         # 실행이 끝날 무렵엔 700열 넘게까지 밀려버렸다(사용자가 다운로드한 구글시트
         # 사본에서 실제 확인됨). table_range="A1"로 "표는 A1부터 시작한다"고 못박아
         # 두면 이 오작동 없이 항상 A열부터 정확히 이어붙는다.
-        ws.append_rows(new_values, value_input_option="RAW", table_range="A1")
-        _apply_gsheet_formatting_range(ws, last_synced + 1, max_row, n_cols)
+        resp = ws.append_rows(new_values, value_input_option="RAW", table_range="A1")
+        span = _updated_row_span(resp)
+        if span:  # 이 탭에 실제로 쓰인 행에만 서식을 입히고, 다음 자동저장 때 확인할 행(remote_last_row)을 기억한다
+            _apply_gsheet_formatting_range(ws, span[0], span[1], n_cols)
+            sync_state["remote_last_row"] = span[1]
         sync_state["synced_rows"] = max_row
 
         print(f"[구글시트] 증분 동기화 완료: {len(new_values)}건 추가 (누적 {max_row - 1}건, 탭: {ws.title})")
@@ -1500,8 +1541,9 @@ def maybe_autosave(sheet, ws, save_path, total_new_count, sync_state):
         return
     print(f"[자동 저장] 지금까지 새로 수집한 물건 {total_new_count}건 - 중간 저장 중...")
     if GOOGLE_SHEETS_ENABLED and ws is not None:
-        prev_last_row = sync_state.get("synced_rows", 1)
-        if prev_last_row > 1:  # 1행(헤더)뿐이면 아직 비교할 이전 저장분이 없음
+        # 로컬 엑셀 행 번호(synced_rows)가 아니라 이 탭에 실제로 쓴 마지막 행(remote_last_row)으로 확인한다.
+        prev_last_row = int(sync_state.get("remote_last_row") or 1)
+        if prev_last_row > 1:  # 1행(헤더)뿐이거나 아직 쓴 적이 없으면 비교할 이전 저장분이 없음
             still_there = _remote_row_has_data(ws, prev_last_row)
             if still_there is None:
                 print(f"[검증] 직전 저장분({prev_last_row}행) 확인 실패(네트워크) - 이번 저장은 그대로 진행합니다.")
@@ -3418,10 +3460,15 @@ def main():
         safe_results = {"OK", "건너뜀(원격이 이미 더 많음, 안전)", ""}
         if GOOGLE_SHEETS_ENABLED and current_week_ws is not None and \
                 (merge_result not in safe_results or not count_check_ok or incomplete_notes):
-            print(f"\n[종료 코드] 검증 결과가 '{verification_result}'로 안전하지 않아 "
-                  f"이번 실행을 실패로 표시합니다 (GitHub Actions에서 실패 알림이 발송되도록). "
-                  f"실제 데이터는 유실되지 않았을 수 있으나, 반드시 로그를 확인해주세요.")
-            sys.exit(1)
+            if run_should_fail(merge_result, count_check_ok, incomplete_notes, deadline_hit,
+                               PARTIAL_OK_IF_DEADLINE, safe_results):
+                print(f"\n[종료 코드] 검증 결과가 '{verification_result}'로 안전하지 않아 "
+                      f"이번 실행을 실패로 표시합니다 (GitHub Actions에서 실패 알림이 발송되도록). "
+                      f"실제 데이터는 유실되지 않았을 수 있으나, 반드시 로그를 확인해주세요.")
+                sys.exit(1)
+            print(f"\n[종료 코드] 마감({RUN_DEADLINE_MINUTES:g}분) 도달로 일부만 수집했지만(" + "; ".join(incomplete_notes) +
+                  ") 시트 합치기·건수검증은 정상이라 실패로 표시하지 않습니다. 이어지는 보충 실행이 나머지를 수집합니다.")
+            print("::warning::수집이 마감 시간에 도달해 일부만 수집됨 - 이어지는 보충 실행(토요일 새벽)이 마무리합니다")
 
 
 if __name__ == "__main__":

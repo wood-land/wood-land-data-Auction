@@ -43,5 +43,26 @@ class CountShortfall(unittest.TestCase):
         self.assertEqual(C.judge_count_shortfall("경매", 100, 100, 0, 150), ([], []))
 
 
+class RunShouldFail(unittest.TestCase):
+    """2026-11-07: 목요일 예약 실행의 '마감 때문에 미완료'만 경고로, 나머지는 그대로 실패."""
+    SAFE = {"OK", "건너뜀(원격이 이미 더 많음, 안전)", ""}
+    NOTES = ["마감 320분 도달", "경매 수집 미완료(처리 6,387 / 시작 6,727)"]
+
+    def test_deadline_partial_is_warning_only_when_partial_ok(self):
+        self.assertFalse(C.run_should_fail("OK", True, self.NOTES, True, True, self.SAFE))
+        self.assertTrue(C.run_should_fail("OK", True, self.NOTES, True, False, self.SAFE))  # 토요일·수동 실행은 그대로 실패
+
+    def test_incomplete_without_deadline_still_fails(self):
+        self.assertTrue(C.run_should_fail("OK", True, ["경매 수집 미완료(처리 100 / 시작 6,727)"], False, True, self.SAFE))
+
+    def test_unsafe_merge_or_count_failure_still_fails_even_if_partial_ok(self):
+        self.assertTrue(C.run_should_fail("병합 실패", True, self.NOTES, True, True, self.SAFE))
+        self.assertTrue(C.run_should_fail("OK", False, self.NOTES, True, True, self.SAFE))
+
+    def test_clean_run_does_not_fail(self):
+        self.assertFalse(C.run_should_fail("OK", True, [], False, False, self.SAFE))
+        self.assertFalse(C.run_should_fail("", True, [], False, True, self.SAFE))
+
+
 if __name__ == "__main__":
     unittest.main()
