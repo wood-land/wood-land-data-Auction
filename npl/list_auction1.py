@@ -96,7 +96,7 @@ NPL_HOLDERS = [
     ("npl_woorifni", "우리금융F&I"), ("npl_etcamc", "자산관리"), ("npl_etc", "기타"),
 ]
 
-HEADLESS = True
+HEADLESS = os.environ.get("A1_HEADLESS", "1") != "0"   # run_pc.py --show 이면 창을 띄운다
 PAGE_DELAY_SEC = 1.5
 
 HEADERS = [
