@@ -1,19 +1,15 @@
 name: npl-weekly
 
-# 옥션원 NPL 목록 -> 두인 시트 매칭 -> 두인 상세 -> 구글시트 'NPL_YYYYMMDD_상세' + 'NPL_로그'
-# 코드: npl/npl_crawler.py (README 참고). 결과는 이 저장소에 올리지 않고 구글시트에만 저장한다.
-# Secrets: SITE_DOMAIN, SITE_LOGIN_ID, SITE_LOGIN_PW, GOOGLE_SHEET_ID, GOOGLE_SA_KEY_JSON_ADMIN (auction.yml 과 동일)
-#          A1_LOGIN_ID, A1_LOGIN_PW (옥션원)
+# 옥션원 NPL 목록(감정가 2억~15억) -> 구글시트 'NPL_YYYYMMDD' + 'NPL_로그_목록'
+# 코드: npl/list_npl_sheet.py (로컬판: 200_MU-MU_Auction 의 500_local/52. 경공매 추출/03_3)
+# 저장 시트: 코드 안 NPL_SHEET_ID (10vK5WyeAV...). 서비스 계정에 편집자로 공유돼 있어야 한다.
+# Secrets: A1_LOGIN_ID, A1_LOGIN_PW (옥션원), GOOGLE_SA_KEY_JSON_ADMIN (서비스 계정 키)
+# 주의: 옥션원이 GitHub 서버 IP를 403 으로 막은 적이 있다. 로그인 단계에서 실패하면 그 문제다.
 
 on:
   schedule:
     - cron: "0 13 * * 4"   # 매주 목요일 22:00 KST (= 목 13:00 UTC)
   workflow_dispatch:
-    inputs:
-      max_detail:
-        description: "시험용: 두인 상세를 읽을 물건 수 상한 (0 또는 비움 = 제한 없음)"
-        required: false
-        default: "0"
 
 permissions:
   contents: read
@@ -21,11 +17,7 @@ permissions:
 jobs:
   npl:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
-    concurrency:
-      # 같은 두인 계정으로 auction-weekly 와 동시에 접속하지 않도록 같은 그룹을 쓴다(앞 작업이 끝나면 시작).
-      group: weekly-data-collection
-      cancel-in-progress: false
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: npl
@@ -38,33 +30,20 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: |
-            npl/requirements.txt
-            auction/requirements.txt
 
       - name: 패키지 설치
-        run: pip install -r requirements.txt
+        run: pip install requests beautifulsoup4 lxml openpyxl gspread google-auth
 
-      - name: 브라우저 설치
-        id: chrome
-        uses: browser-actions/setup-chrome@v1
+      - name: 구글 키 파일 만들기
+        env:
+          GOOGLE_SA_KEY_JSON: ${{ secrets.GOOGLE_SA_KEY_JSON_ADMIN }}
+        run: |
+          printf '%s' "$GOOGLE_SA_KEY_JSON" > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_CREDENTIALS_PATH=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
 
       - name: 실행
-        timeout-minutes: 220   # job 제한(240분)보다 일찍 끝나야 NPL_로그 기록 단계가 돌 수 있다
         env:
-          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-          SITE_DOMAIN: ${{ secrets.SITE_DOMAIN }}
-          SITE_LOGIN_ID: ${{ secrets.SITE_LOGIN_ID }}
-          SITE_LOGIN_PW: ${{ secrets.SITE_LOGIN_PW }}
-          TYPE_A_LABEL: ${{ secrets.TYPE_A_LABEL }}
-          TYPE_B_LABEL: ${{ secrets.TYPE_B_LABEL }}
-          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-          SHARE_EMAIL: ${{ secrets.SHARE_EMAIL }}
-          GOOGLE_SA_KEY_JSON: ${{ secrets.GOOGLE_SA_KEY_JSON_ADMIN }}
+          PYTHONUTF8: "1"
           A1_LOGIN_ID: ${{ secrets.A1_LOGIN_ID }}
           A1_LOGIN_PW: ${{ secrets.A1_LOGIN_PW }}
-          NPL_MAX_DETAIL: ${{ github.event.inputs.max_detail || '0' }}
-          NPL_DEADLINE_MINUTES: "180"
-          TRIGGER_TYPE: ${{ github.event_name }}
-        run: python npl_crawler.py
+        run: python list_npl_sheet.py
