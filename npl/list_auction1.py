@@ -58,8 +58,8 @@ LOGIN_URL = f"{SITE_BASE}/common/login_box.php"
 NPL_SEARCH_URL = f"{SITE_BASE}/auction/ca_npl.php"
 DETAIL_URL_FMT = f"{SITE_BASE}/auction/ca_view.php?product_id={{pid}}"
 
-LOGIN_ID = os.environ.get("A1_LOGIN_ID", "")
-LOGIN_PW = os.environ.get("A1_LOGIN_PW", "")
+LOGIN_ID = os.environ.get("A1_LOGIN_ID", "").strip()
+LOGIN_PW = os.environ.get("A1_LOGIN_PW", "").strip()
 
 GOOGLE_SHEETS_ENABLED = False   # 저장은 npl_crawler.py 가 한다(이 파일은 목록 수집 전용)
 GOOGLE_SHEET_ID = ""
@@ -179,9 +179,19 @@ def login(driver):
     pw_el.send_keys(Keys.ENTER)
     time.sleep(3)
     dismiss_alert(driver)
+    log(f"로그인 시도 후 URL={driver.current_url} 로그아웃표시={is_logged_in(driver)}")
 
     driver.get(NPL_SEARCH_URL)
-    wait.until(EC.presence_of_element_located((By.ID, "fm_aulist")))
+    try:
+        wait.until(EC.presence_of_element_located((By.ID, "fm_aulist")))
+    except TimeoutException:
+        txt = ""
+        try:
+            txt = re.sub(r"\s+", " ", driver.find_element(By.TAG_NAME, "body").text)[:400]
+        except Exception:
+            pass
+        raise RuntimeError(f"NPL 검색 화면을 열지 못함: URL={driver.current_url} 제목={driver.title!r} "
+                           f"로그아웃표시={is_logged_in(driver)} 본문={txt!r}")
     if not is_logged_in(driver):
         raise RuntimeError("로그인 실패로 보입니다 (페이지에 '로그아웃'이 없음). 아이디/비밀번호를 확인하세요.")
     log("옥션원 로그인 완료")
