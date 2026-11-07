@@ -131,9 +131,13 @@ def get_driver():
     opts.add_argument("--no-sandbox")              # GitHub Actions(리눅스) 필수
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
-    chrome_bin = os.environ.get("CHROME_BIN", "")
-    if chrome_bin and os.path.exists(chrome_bin):
-        opts.binary_location = chrome_bin
+    # 러너에 미리 깔린 chromedriver 는 시스템 Chrome 과 버전이 맞는다(두인 수집기와 같은 방식).
+    # setup-chrome 이 받은 최신 Chrome(CHROME_BIN)은 드라이버와 버전이 달라 마지막 수단으로만 쓴다.
+    for cand in ("/usr/bin/google-chrome", "/usr/bin/google-chrome-stable",
+                 "/usr/bin/chromium-browser", "/usr/bin/chromium", os.environ.get("CHROME_BIN", "")):
+        if cand and os.path.exists(cand):
+            opts.binary_location = cand
+            break
     opts.add_experimental_option("excludeSwitches", ["enable-logging"])
     return webdriver.Chrome(service=Service(), options=opts)
 
