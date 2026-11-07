@@ -1,7 +1,0 @@
-selenium
-openpyxl
-requests
-beautifulsoup4
-pdfplumber
-gspread
-google-auth
