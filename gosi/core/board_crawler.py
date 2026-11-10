@@ -89,6 +89,29 @@ def download_jose_rows(session, adapter, attachments, title, crawled_at, city: C
     if regions is None:
         return []
     rows = []
+    downloaded = {}  # 같은 첨부를 문맥 읽기와 본 처리에서 두 번 받지 않는다
+
+    def fetch(att):
+        if att["url"] not in downloaded:
+            try:
+                downloaded[att["url"]] = _download(session, adapter, att, None)
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code in (400, 401, 403) and detail_url:
+                    downloaded[att["url"]] = _download(session, adapter, att, detail_url)  # Referer 가 없으면 막는 서버(가평군 실측)
+                else:
+                    raise
+        return downloaded[att["url"]]
+
+    # 같은 글의 공고문(hwp/hwpx/pdf/docx) 본문: 토지조서 표에 리만 적혀 있을 때 시군·읍면을 공고문 '사업시행지역'에서 보완하는 문맥.
+    # 읽기·다운로드 실패는 문맥이 없을 뿐이라 조용히 넘기고, 첨부별 오류 기록은 아래 본 처리가 맡는다.
+    context_text = ""
+    if any(a["ext"] in ("xls", "xlsx", "xlsm") for a in attachments):
+        for att in attachments:
+            if att["ext"] in ("hwp", "hwpx", "docx", "pdf") and not jose_extractor.FORM_FILENAME_RE.search(att.get("name", "")):
+                try:
+                    context_text += " " + jose_extractor.context_text_of(att["ext"], fetch(att))
+                except requests.RequestException:
+                    continue
     for att in attachments:
         if att["ext"] not in JOSE_SUPPORTED_EXT:
             if att["ext"] in ("hwp", "hwpml"):
@@ -96,19 +119,14 @@ def download_jose_rows(session, adapter, attachments, title, crawled_at, city: C
                         "구버전 .hwp 는 표 추출 불가")
             continue
         try:
-            try:
-                data = _download(session, adapter, att, None)
-            except requests.HTTPError as e:
-                if e.response is not None and e.response.status_code in (400, 401, 403) and detail_url:
-                    data = _download(session, adapter, att, detail_url)  # Referer 가 없으면 막는 서버(가평군 실측)
-                else:
-                    raise
+            data = fetch(att)
             if jose_extractor.not_a_document(data):  # 오류·이동 안내 페이지를 받은 것(통영시·해운대구 실측) - 다시 받도록 다운로드 실패로 기록한다
                 raise requests.HTTPError(f"첨부 대신 문서가 아닌 응답 {len(data)}바이트")
             report = {}
             got = jose_extractor.extract_from_attachment(
                 data, att["ext"], att["name"], title, regions,
                 site_name=city.city, collected_at=crawled_at, ai=AI_DOC, report=report,
+                context_text=context_text,
             )
             rows += got
             LOG.doc(city.city, "고시공고", title, detail_url, att["name"], att["ext"],

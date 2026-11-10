@@ -686,6 +686,11 @@ def rows_from_grid(grid, ctx):
     head_text = squash(" ".join(" ".join(r) for r in grid[:hdr]))
     if re.search(NON_LAND_TABLE, head_text):
         return []
+    for row0 in reversed(grid[:hdr]):  # 머리글 위의 제목 행('경기도 의정부시')도 아래 행들의 시도·시군 문맥이다
+        sec0 = section_heading(row0)
+        if sec0:
+            ctx["section"] = sec0
+            break
     cols, heads = classify_heads(grid, hdr)
     jcol = cols.get("jibun", cols.get("jibun_orig"))
     if jcol is None:
@@ -712,6 +717,24 @@ def rows_from_grid(grid, ctx):
     return rows_by_cols(grid, hdr, cols, heads, ctx)
 
 
+# 표 중간의 제목 행('경기도 가평군 조종면' 한 칸만 채워진 줄, 병합 칸이면 같은 값이 반복)은 그 아래 행들의 시도·시군·읍면이다.
+# 아래 행에는 '신상리'처럼 리만 적혀 있어, 이를 쓰지 않으면 게시판 지자체(한국부동산원은 본사 대구 동구) 기본값이 붙어 없는 주소가 된다
+# (한국부동산원 세곡천·솔안천·C노선 토지조서 실측 2026-11-10).
+_SECTION_LOC_RE = re.compile(
+    r"(?:[가-힣]{2,6}(?:특별시|광역시|특별자치시|특별자치도|도)\s*)?[가-힣]{1,5}[시군구](?:\s*[가-힣]{1,5}구)?(?:\s*[가-힣0-9]{1,5}[읍면])?")
+_HAS_SIGUN_RE = re.compile(r"[가-힣]{1,5}[시군구](?:\s|$)")
+
+
+def section_heading(row):
+    """행의 값이 하나뿐(병합 포함)이고 그것이 '[시도] 시군[구] [읍면]' 형태의 소재지면 그 소재지, 아니면 ''."""
+    vals = {clean(c) for c in row if clean(c)}
+    if len(vals) == 1:
+        v = next(iter(vals))
+        if len(v) <= 30 and _SECTION_LOC_RE.fullmatch(v):
+            return v
+    return ""
+
+
 def rows_by_cols(grid, hdr, cols, heads, ctx):
     """열 구성(cols)이 정해진 표에서 자료 행을 읽는다. 소유자 '이름'은 저장하지 않고 분류값(owner_type)만 남긴다."""
     jcol = cols.get("jibun", cols.get("jibun_orig"))
@@ -723,6 +746,10 @@ def rows_by_cols(grid, hdr, cols, heads, ctx):
             continue
         if any(re.fullmatch(r"(합계|소계|총계|계)", squash(x)) for x in row[:jcol + 1]):
             continue  # 합계행('합 계 | 3필지')을 지번 3 으로 읽지 않는다(가평군 실측)
+        sec = section_heading(row)
+        if sec:
+            ctx["section"] = sec  # 이 제목 행 아래 행들의 시도·시군·읍면
+            continue
         pre = ""
         m = PARCEL_RE.search(clean(cell))
         if m and m.start() > 0:
@@ -748,6 +775,8 @@ def rows_by_cols(grid, hdr, cols, heads, ctx):
             add(row[c])
         add(pre)
         loc = " ".join(parts)
+        if ctx.get("section") and loc and not _HAS_SIGUN_RE.search(loc):
+            loc = ctx["section"] + " " + loc
         if cols["loc_prefix"] and cols["loc_prefix"] not in loc:
             loc = (cols["loc_prefix"] + " " + loc).strip()
         if loc and re.fullmatch(r"[A-Za-z0-9\-]{1,6}\s*(블록|블럭|획지|BL)?", squash(loc)):
@@ -917,6 +946,34 @@ _DECL_RE = re.compile(
     rf"(?:(?P<sido>{_DECL_SIDO})\s*)?(?P<sigun>[가-힣]{{1,5}}[시군구])\s*(?:(?P<eup>[가-힣]{{1,4}}[읍면])\s*)?"
     rf"(?P<ris>{_DECL_RI}(?:\s*(?:,|·|、|및|와|과)\s*{_DECL_RI})*)\s*(?:일원|일대)")
 
+# 공고문의 '사업시행지역 : 가평군 가평읍 상색리 ~ 춘천시 남산면 서천리', '경기도 가평군 상면 율길리181번지 일원(솔안천)' 처럼 라벨 뒤에 적힌 위치.
+# 토지조서(xlsx)는 공고문(hwp/pdf)과 다른 첨부라 같은 글의 공고문 본문을 문맥으로 함께 읽는다(한국부동산원 실측 2026-11-10).
+_LABEL_RE = re.compile(r"(?:사업\s*시행\s*지역|사업\s*구간|사업\s*위치|위\s*치)\s*[:：]\s*([^○◦•￭▪■※]{4,160})")
+_PIECE_RE = re.compile(
+    rf"(?:(?P<sido>{_DECL_SIDO})\s*)?(?:(?P<sigun>[가-힣]{{1,5}}[시군구])\s*)?(?:(?P<eup>[가-힣]{{1,4}}[읍면])\s*)?"
+    rf"(?P<ri>{_DECL_RI})(?:\s*(?:산\s*)?\d+(?:-\d+)?\s*(?:번지)?)?")
+
+
+def _label_locations(text):
+    """라벨 뒤 위치 문구를 ~ , · 로 나눠 조각마다 (시도, 시군, 읍면, 리)를 읽는다. 시군이 없는 조각은 앞 조각의 시도·시군·읍면을 잇는다."""
+    out = []
+    for m in _LABEL_RE.finditer(text or ""):
+        prev = ("", "", "")
+        for piece in re.split(r"\s*[~∼～,·]\s*", m.group(1)):
+            piece = re.sub(r"\s*(?:일원|일대).*$", "", piece).strip()
+            pm = None
+            for pm in _PIECE_RE.finditer(piece):
+                pass  # 조각 끝쪽(리 이름이 있는 마지막 위치)을 쓴다. 앞의 '국가하천 홍천강-' 같은 수식은 건너뛴다
+            if not pm:
+                continue
+            sido, sigun, eup = pm.group("sido") or "", pm.group("sigun") or "", pm.group("eup") or ""
+            if not sigun:  # 시군을 안 적은 조각은 앞 조각의 시도·시군·읍면을 잇는다
+                sido, sigun, eup = prev[0], prev[1], eup or prev[2]
+            if sigun:
+                out.append((pm.group("ri"), (sido, sigun, eup)))
+                prev = (sido, sigun, eup)
+    return out
+
 
 def declared_locations(text):
     """본문에서 '<시도> <시군> [읍면] 리, 리, 리 일원' 으로 선언된 위치 -> {리: (시도, 시군, 읍면)}. 같은 리가 서로 다른 곳으로 선언되면 뺀다."""
@@ -926,6 +983,9 @@ def declared_locations(text):
             val = (m.group("sido") or "", m.group("sigun"), m.group("eup") or "")
             if out.setdefault(ri, val) != val:
                 bad.add(ri)
+    for ri, val in _label_locations(text):
+        if out.setdefault(ri, val) != val:
+            bad.add(ri)
     return {k: v for k, v in out.items() if k not in bad}
 
 
@@ -950,6 +1010,8 @@ def apply_declared_locations(text, rows):
         if cur_sigun and cur_sigun != sigun and re.search(re.escape(cur_sigun) + r"(?:[가-힣]{1,4}[읍면])?" + re.escape(ri), flat):
             continue  # 행 자신이 다른 시군을 리와 함께 적었다
         cur_sido = next((w for w in words if re.fullmatch(_DECL_SIDO, w)), "")
+        if not sido and cur_sigun and cur_sigun != sigun:
+            cur_sido = ""  # 게시판 지자체 기본 시도('대구광역시')는 기본 시군과 짝이다. 다른 시군으로 바꾸면서 그 시도만 남기면 '대구광역시 가평군' 이 된다
         r["sojaeji"] = " ".join(x for x in (sido or cur_sido, sigun, eup, ri) if x) + tail
     return rows
 
@@ -1415,7 +1477,7 @@ def _looks_like_land_list(text):
 
 
 def extract_from_attachment(data, ext, filename, title, regions, site_name="", collected_at="",
-                             sojaeji_with_jibun=True, ai=None, report=None):
+                             sojaeji_with_jibun=True, ai=None, report=None, context_text=""):
     """첨부파일 바이트(다운로드 직후, 디스크에 남기지 말고 메모리에서 바로 처리) -> jose_row 리스트.
     표를 못 읽으면 본문 텍스트 규칙(regions.rows_from_text)으로 대체한다.
     그래도 0행이거나 모든 행의 소재지를 못 찾으면 ai(core.ai_extract.AiDocExtractor)가 있을 때 DeepSeek 으로 읽는다.
@@ -1513,9 +1575,26 @@ def extract_from_attachment(data, ext, filename, title, regions, site_name="", c
             rep["detail"] = f"블록/획지 번호 {rep['skipped_lots']}행 제외"
         if rows and rep["skipped_public"] and rep["code"] in ("OK", "ADDR_CHECK"):
             rep["detail"] = (rep["detail"] + "; " if rep["detail"] else "") + f"공공 소유 {rep['skipped_public']}건 제외"
-    if rows and re.search(r"일원|일대", full_text(ext, data) or ""):
-        rows = apply_declared_locations(full_text(ext, data), rows)
+    if rows:
+        # context_text: 같은 글의 다른 첨부(공고문) 본문. 토지조서 표에는 리만 적고 시군은 공고문 '사업시행지역'에만 있는 글이 있다.
+        text_all = (full_text(ext, data) or "") + " " + (context_text or "")
+        if re.search(r"일원|일대|사업\s*시행\s*지역|사업\s*구간", text_all):
+            rows = apply_declared_locations(text_all, rows)
     return _to_jose_out(rows, filename, site_name, collected_at)
+
+
+
+def context_text_of(ext, data):
+    """공고문류 첨부(hwp/hwpx/pdf/docx) -> 본문 텍스트(다른 첨부의 소재지 문맥용). 읽을 수 없으면 ''(문맥이 없을 뿐 오류가 아니다)."""
+    ext = (ext or "").lower()
+    try:
+        if ext == "hwp":
+            return _legacy_hwp_text(data) if _is_legacy_hwp(ext, data) else ""
+        if ext in ("hwpx", "docx", "pdf"):
+            return full_text(ext, data) or ""
+    except Exception:  # 문맥용 읽기 실패가 토지조서 추출을 막지 않게 한다
+        return ""
+    return ""
 
 
 def _to_jose_out(rows, filename, site_name, collected_at):
