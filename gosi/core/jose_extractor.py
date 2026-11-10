@@ -8,7 +8,7 @@ jose_extractor.py — 고시/공고 붙임파일에서 "토지조서(jose_rows)"
 새 지자체를 추가할 때 이 파일은 건드리지 않는 것이 원칙이다. 표 양식이 정말
 새로운 경우에만(COLUMN_RULES 로 못 잡는 머리글) 이 파일의 COLUMN_RULES 를 넓힌다.
 
-지원 형식: hwpx, docx, xlsx/xlsm, pdf (표 우선, 표가 없으면 본문 텍스트 규칙).
+지원 형식: hwpx, docx, xlsx/xlsm, xls(구버전), pdf (표 우선, 표가 없으면 본문 텍스트 규칙).
 구버전 이진 .hwp 는 순수 파이썬으로 표를 읽을 수 없어 지원하지 않는다(스킵).
 
 핵심 함수:
@@ -372,6 +372,35 @@ def xlsx_grids(data):
     return out
 
 
+def xls_grids(data):
+    """구버전 엑셀(.xls, BIFF/OLE) -> [(시트번호, 0, grid), ...]. xlsx_grids 와 같은 규칙(병합 칸 값 채움).
+    한국부동산원 토지조서(열람용)가 .xls 라 지원이 필요했다(2026-11-10 실측: 이전에는 UNSUPPORTED 로 0필지)."""
+    import xlrd
+    wb = xlrd.open_workbook(file_contents=data, formatting_info=True)
+
+    def txt(v):
+        if v is None or v == "":
+            return ""
+        if isinstance(v, float) and v.is_integer():
+            v = int(v)
+        return clean(str(v))
+
+    out = []
+    for si, ws in enumerate(wb.sheets(), 1):
+        g = [[txt(ws.cell_value(r, c)) for c in range(ws.ncols)] for r in range(ws.nrows)]
+        for rlo, rhi, clo, chi in ws.merged_cells:  # (행시작, 행끝+1, 열시작, 열끝+1)
+            try:
+                v = g[rlo][clo]
+                for r in range(rlo, rhi):
+                    for c in range(clo, chi):
+                        g[r][c] = v
+            except IndexError:
+                pass
+        if g:
+            out.append((si, 0, pad_grid(g)))
+    return out
+
+
 def pdf_grids(data):
     import pdfplumber
     out = []
@@ -409,10 +438,14 @@ def local_grids(ext, data):
         return pdf_grids(data)
     if ext in ("hwpx", "xlsx", "xlsm", "docx") and not data.startswith(b"PK\x03\x04"):
         return None
+    if ext == "xls" and not data.startswith(b"\xd0\xcf\x11\xe0"):
+        return None  # 확장자만 .xls 이고 실제는 다른 형식(예: xlsx zip)이면 지원 안 함으로 처리
     if ext == "hwpx":
         return hwpx_grids(data)
     if ext in ("xlsx", "xlsm"):
         return xlsx_grids(data)
+    if ext == "xls":
+        return xls_grids(data)
     if ext == "docx":
         return docx_grids(data)
     return None
