@@ -29,8 +29,8 @@ from .ai_extract import AI_DOC
 from .run_log import LOG
 from .sqlite_store import post_key
 
-# hwpx/docx/xlsx/pdf 는 core.jose_extractor 가 직접 읽는다. 옛 이진 .hwp 는 지원하지 않는다.
-JOSE_SUPPORTED_EXT = {"hwpx", "xlsx", "xlsm", "docx", "pdf"}
+# hwpx/docx/xlsx/xls/pdf 는 core.jose_extractor 가 직접 읽는다. 옛 이진 .hwp 는 지원하지 않는다.
+JOSE_SUPPORTED_EXT = {"hwpx", "xlsx", "xlsm", "xls", "docx", "pdf"}
 # 안전장치: 어댑터가 날짜를 못 읽는 사이트(형식이 다르거나 구조가 안 맞음)를 만나면
 # cutoff 판정이 걸리지 않아 게시판 전체를 끝까지 훑을 수 있다. 그런 사이트는 실제로는
 # 코드를 고쳐야 하는 신호이지, 계속 요청을 보내야 할 이유가 아니다 (law.md 서버 부하 배려).

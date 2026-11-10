@@ -8,6 +8,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
+from core.board_crawler import JOSE_SUPPORTED_EXT  # noqa: E402
 from core.jose_extractor import Regions, extract_from_attachment, local_grids  # noqa: E402
 
 FIXTURE = os.path.join(HERE, "fixtures", "reb_jiso_small.xls")
@@ -17,6 +18,10 @@ class XlsAttachmentTest(unittest.TestCase):
     def setUp(self):
         with open(FIXTURE, "rb") as f:
             self.data = f.read()
+
+    def test_crawler_does_not_skip_xls(self):
+        # 2026-11-10: 추출기는 .xls 를 읽는데 크롤러의 지원 확장자에서 빠져 첨부가 조용히 건너뛰어졌다(Actions 실행으로 발견).
+        self.assertIn("xls", JOSE_SUPPORTED_EXT)
 
     def test_xls_is_read_as_grid(self):
         grids = local_grids("xls", self.data)
