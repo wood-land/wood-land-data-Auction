@@ -15,6 +15,10 @@ class SectionHeadingTest(unittest.TestCase):
         self.assertEqual(section_heading(["경기도 가평군 조종면", "", "", ""]), "경기도 가평군 조종면")
         self.assertEqual(section_heading(["경기도 의정부시"] * 6), "경기도 의정부시")
 
+    def test_label_prefixed_heading_row(self):
+        self.assertEqual(section_heading(["○소재지 : 경기도 가평군 가평읍"] * 7), "경기도 가평군 가평읍")
+        self.assertEqual(section_heading(["○소재지 : 강원특별자치도 춘천시", "", ""]), "강원특별자치도 춘천시")
+
     def test_data_or_title_row_is_not_heading(self):
         self.assertEqual(section_heading(["1", "신상리", "738-2", "전"]), "")
         self.assertEqual(section_heading(["마일천 개선(재해)복구사업"] * 4), "")
@@ -139,6 +143,28 @@ class ApplyDoesNotShortenTest(unittest.TestCase):
         self.assertEqual(rows[0]["sojaeji"], "충청남도 천안시 서북구 직산읍 모시리 115-18")
 
 
+class HeadingRowInTableTest(unittest.TestCase):
+    """표 안 '○소재지 : 시도 시군 [읍면]' 제목 줄이 그 아래 리만 적힌 행의 시군이다(사용자 지적 2026-11-11: 문서 위로 올라가 보면 시군이 있다)."""
+
+    def test_rows_inherit_nearest_heading_above(self):
+        import io
+        import openpyxl
+        from core.jose_extractor import Regions, extract_from_attachment
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["토지조서"] + [None] * 4)
+        ws.append(["○소재지 : 경기도 가평군 가평읍"] + [None] * 4)
+        ws.append(["연번", "소재지", "지번", "지목", "면적(㎡)"])
+        ws.append([1, "상색리", "204-7", "전", 336])
+        ws.append(["○소재지 : 강원특별자치도 춘천시 남산면"] + [None] * 4)
+        ws.append([2, "달전리", "405-105", "답", 120])
+        buf = io.BytesIO()
+        wb.save(buf)
+        rows = extract_from_attachment(buf.getvalue(), "xlsx", "토지조서.xlsx", "도로건설공사", Regions("대구광역시", "동구", nationwide=True))
+        self.assertEqual([r["sojaeji"] for r in rows],
+                         ["경기도 가평군 가평읍 상색리 204-7", "강원특별자치도 춘천시 남산면 달전리 405-105"])
+
+
 class NationwideExtractAllTest(unittest.TestCase):
     """사업지가 전국인 기관(2026-11-11 사용자 지시): 토지조서에서 읽을 수 있는 행은 모두 추출한다. 문서에 시군이 없으면 본사 기본 소재지
     (대구 동구 등)를 붙이지 않고 문서에 적힌 읍면·리·지번 그대로 둔다. 사업시행지역이 양 끝 리 범위여도 포기하지 않는다."""
@@ -169,7 +195,7 @@ class NationwideExtractAllTest(unittest.TestCase):
                               "사업시행지역 : 가평군 가평읍 상색리 ~ 춘천시 남산면 서천리 ￭ 사업시행자")
         self.assertEqual([r["jibun"] for r in rows], ["204-7", "405-105"])
         self.assertTrue(rows[0]["sojaeji"].startswith("가평군 가평읍 상색리"))
-        self.assertEqual(rows[1]["sojaeji"], "달전리 405-105")  # 시군 근거가 없어도 추출, 본사 기본값은 붙이지 않음
+        self.assertEqual(rows[1]["sojaeji"], "달전리 405-105")  # 문서에 시군 근거가 전혀 없어도 추출, 본사 기본값은 붙이지 않음
         self.assertNotIn("skipped_region", rep)
 
     def test_address_without_sigun_is_extracted_as_written(self):

@@ -734,11 +734,16 @@ _SECTION_LOC_RE = re.compile(
 _HAS_SIGUN_RE = re.compile(r"[가-힣]{1,5}[시군구](?:\s|$)")
 
 
+_SECTION_LABEL_RE = re.compile(r"^[○◦•￭▪■※\s]*(?:소\s*재\s*지|위\s*치)\s*[:：]\s*")
+
+
 def section_heading(row):
-    """행의 값이 하나뿐(병합 포함)이고 그것이 '[시도] 시군[구] [읍면]' 형태의 소재지면 그 소재지, 아니면 ''."""
+    """행의 값이 하나뿐(병합 포함)이고 그것이 '[시도] 시군[구] [읍면]' 형태의 소재지면 그 소재지, 아니면 ''.
+    '○소재지 : 경기도 가평군 가평읍' 처럼 앞에 라벨이 붙은 제목 줄도 라벨을 떼고 읽는다(한국부동산원 제2경춘·홍천강 토지조서 실측 2026-11-11:
+    이런 줄이 표 안에서 시군·읍면이 바뀔 때마다 나오고 그 아래 행에는 리만 적혀 있다)."""
     vals = {clean(c) for c in row if clean(c)}
     if len(vals) == 1:
-        v = next(iter(vals))
+        v = _SECTION_LABEL_RE.sub("", next(iter(vals))).strip()
         if len(v) <= 30 and _SECTION_LOC_RE.fullmatch(v):
             return v
     return ""
@@ -805,7 +810,10 @@ def rows_by_cols(grid, hdr, cols, heads, ctx):
         add(pre)
         loc = " ".join(parts)
         if ctx.get("section") and loc and not _HAS_SIGUN_RE.search(loc):
-            loc = ctx["section"] + " " + loc
+            sec_words = ctx["section"].split()
+            if sec_words and sec_words[-1] in loc.split():
+                sec_words = sec_words[:-1]  # 행이 이미 읍·면을 적었으면 제목 줄의 읍·면은 중복
+            loc = " ".join(sec_words + [loc])
         if cols["loc_prefix"] and cols["loc_prefix"] not in loc:
             loc = (cols["loc_prefix"] + " " + loc).strip()
         if loc and re.fullmatch(r"[A-Za-z0-9\-]{1,6}\s*(블록|블럭|획지|BL)?", squash(loc)):
