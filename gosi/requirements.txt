@@ -4,6 +4,7 @@ beautifulsoup4
 google-cloud-bigquery
 pdfplumber
 openpyxl
+xlrd
 pypdfium2
 pillow
 google-auth

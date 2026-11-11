@@ -157,7 +157,7 @@ KOREA_REB = City(
     keywords=[],
     match_all=True,
     blacklist=DEFAULT_BLACKLIST,
-    regions=Regions(sido_name="대구광역시", sigun_name="동구"),
+    regions=Regions(sido_name="대구광역시", sigun_name="동구", nationwide=True),
     adapter="reb_board",
 )
 
@@ -175,7 +175,7 @@ LH_BOSANG = City(
     keywords=[],
     match_all=True,
     blacklist=DEFAULT_BLACKLIST,
-    regions=Regions(sido_name="경상남도", sigun_name="진주시"),
+    regions=Regions(sido_name="경상남도", sigun_name="진주시", nationwide=True),
     adapter="lh_board",
 )
 
@@ -190,7 +190,7 @@ DIA_FACILITY = City(
     boards=[{"name": "공지사항"}],
     keywords=["매입", "보상계획"],  # '매입'만으론 '[전라제주]국방·군사시설사업 보상계획 열람공고'(2026-10-14)를 놓친다(2026-11-06 실측)
     blacklist=DEFAULT_BLACKLIST,
-    regions=Regions(sido_name="서울특별시", sigun_name="용산구"),
+    regions=Regions(sido_name="서울특별시", sigun_name="용산구", nationwide=True),
     adapter="mil_bbs_board",
 )
 
@@ -206,7 +206,7 @@ MND_GOSI = City(
     # 필지 목록이 없는 사업계획 글은 첨부를 읽은 뒤 NO_PARCELS 로 걸러진다.
     keywords=["매입", "사업계획", "사유재산", "보상계획"],
     blacklist=DEFAULT_BLACKLIST,
-    regions=Regions(sido_name="서울특별시", sigun_name="용산구"),
+    regions=Regions(sido_name="서울특별시", sigun_name="용산구", nationwide=True),
     adapter="mil_bbs_board",
 )
 
