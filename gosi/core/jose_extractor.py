@@ -1007,6 +1007,15 @@ def _label_locations(text):
     return out
 
 
+def has_declared_range(text):
+    """공고문 라벨 위치가 'A ~ B'(양 끝 위치만 적은 범위)로 적혔는가. 양 끝 사이의 중간 리는 시군을 알 수 없다(제2경춘국도: '가평군 가평읍 상색리 ~ 춘천시 남산면 서천리')."""
+    for m in _LABEL_RE.finditer(text or ""):
+        pieces = [x for x in re.split(r"\s*[~∼～]\s*", m.group(1)) if _PIECE_RE.search(re.sub(r"\s*(?:일원|일대).*$", "", x))]
+        if len(pieces) >= 2:
+            return True
+    return False
+
+
 def declared_locations(text):
     """본문에서 '<시도> <시군> [읍면] 리, 리, 리 일원' 으로 선언된 위치 -> {리: (시도, 시군, 읍면)}. 같은 리가 서로 다른 곳으로 선언되면 뺀다."""
     out, bad = {}, set()
@@ -1226,7 +1235,11 @@ class Regions:
                     status = "CHECK"
                     notes.append("미등록 리, 읍면 없음")
                     self.candidate(dr, "리")
-        region = " ".join(x for x in (self.sido_name, self.sigun_name, eup, dr) if x)
+        if self.nationwide and not sigun:
+            # 사업지가 전국인 기관: 본사 소재지(예: 대구 동구)는 사업지가 아니다. 문서에 적힌 읍면·리·지번만 남겨 PNU 변환(카카오 전국 검색)에 맡긴다
+            region = " ".join(x for x in (eup, dr) if x)
+        else:
+            region = " ".join(x for x in (self.sido_name, self.sigun_name, eup, dr) if x)
         return {"region": region, "status": status, "note": "; ".join(notes), "eup": eup, "dr": dr,
                 "default_region": not sigun}
 
@@ -1625,13 +1638,13 @@ def extract_from_attachment(data, ext, filename, title, regions, site_name="", c
         text_all = (full_text(ext, data) or "") + " " + (context_text or "")
         if re.search(r"일원|일대|사업\s*시행\s*지역|사업\s*구간", text_all):
             rows = apply_declared_locations(text_all, rows)
-        giveup = [r for r in rows if r.get("region_default")]
+        # 사용자 지시 2026-11-11: 사업시행지역이 양 끝 리 범위('A ~ B')로만 적힌 글에서, 그 선언 밖의 리(중간 리)는 시군을 알 수 없어 추출을 포기한다.
+        # 그 밖에 토지조서에 주소(읍면·리·지번)가 있으면 시군이 없어도 문서에 적힌 그대로 추출한다(PNU 는 변환 단계가 맡는다).
+        giveup = [r for r in rows if r.get("region_default")] if has_declared_range(text_all) else []
         if giveup:
-            # 사업지가 전국인 기관에서 문서가 시군을 알려 주지 않은 행(예: 제2경춘국도처럼 사업시행지역에 양 끝 리만 있고 표에는 중간 리만 있는 경우).
-            # 본사 소재지를 붙여 없는 주소로 만들지 않고 추출을 포기한다(사용자 지시 2026-11-11). 시군을 알 수 있는 행은 그대로 추출한다.
             rows = [r for r in rows if not r.get("region_default")]
             rep["skipped_region"] = len(giveup)
-            rep["detail"] = (rep["detail"] + "; " if rep["detail"] else "") + f"시군 근거 없어 추출 포기 {len(giveup)}행"
+            rep["detail"] = (rep["detail"] + "; " if rep["detail"] else "") + f"사업시행지역이 양 끝 리 범위라 중간 리 {len(giveup)}행 추출 포기"
             if not rows:
                 rep["code"] = "NO_REGION"
     return _to_jose_out(rows, filename, site_name, collected_at)

@@ -140,39 +140,48 @@ class ApplyDoesNotShortenTest(unittest.TestCase):
 
 
 class NationwideGiveUpTest(unittest.TestCase):
-    """사업지가 전국인 기관: 문서에서 시군을 못 찾은 행은 본사 기본 소재지를 붙이지 않고 포기한다(사용자 지시 2026-11-11).
-    도로 개설 같은 사업이어도 시군을 알 수 있는 행은 그대로 추출한다."""
+    """사업지가 전국인 기관(2026-11-11 사용자 지시): 사업시행지역이 양 끝 리 범위('A ~ B')면 그 밖의 중간 리는 추출을 포기하고,
+    그 밖에 토지조서에 주소(읍면·리·지번)가 있으면 시군이 없어도 문서에 적힌 그대로 추출한다(본사 기본 소재지는 붙이지 않는다)."""
 
     @staticmethod
-    def _xlsx():
+    def _xlsx(rows):
         import io
         import openpyxl
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.append(["토 지 조 서"] + [None] * 4)
         ws.append(["연번", "소재지", "지번", "지목", "면적(㎡)"])
-        ws.append([1, "상색리", "204-7", "전", 336])   # 공고문 사업시행지역에 적힌 리
-        ws.append([2, "달전리", "405-105", "답", 120])  # 양 끝 사이의 중간 리: 시군 근거 없음
+        for i, (loc, jb) in enumerate(rows, 1):
+            ws.append([i, loc, jb, "전", 100])
         buf = io.BytesIO()
         wb.save(buf)
         return buf.getvalue()
 
-    def _run(self, nationwide):
+    def _run(self, rows, context, nationwide=True):
         from core.jose_extractor import Regions, extract_from_attachment
         rep = {}
-        rows = extract_from_attachment(
-            self._xlsx(), "xlsx", "토지조서.xlsx", "제2경춘국도 도로건설공사", Regions("대구광역시", "동구", nationwide=nationwide),
-            report=rep, context_text="사업시행지역 : 가평군 가평읍 상색리 ~ 춘천시 남산면 서천리 ￭ 사업시행자")
-        return rows, rep
+        got = extract_from_attachment(self._xlsx(rows), "xlsx", "토지조서.xlsx", "도로건설공사", Regions("대구광역시", "동구", nationwide=nationwide),
+                                      report=rep, context_text=context)
+        return got, rep
 
-    def test_nationwide_keeps_known_region_and_gives_up_unknown(self):
-        rows, rep = self._run(True)
+    def test_range_declared_gives_up_middle_ri_only(self):
+        rows, rep = self._run([("상색리", "204-7"), ("달전리", "405-105")],
+                              "사업시행지역 : 가평군 가평읍 상색리 ~ 춘천시 남산면 서천리 ￭ 사업시행자")
         self.assertEqual([r["jibun"] for r in rows], ["204-7"])
         self.assertTrue(rows[0]["sojaeji"].startswith("가평군 가평읍 상색리"))
         self.assertEqual(rep.get("skipped_region"), 1)
 
+    def test_address_without_sigun_is_extracted_as_written_when_no_range(self):
+        rows, rep = self._run([("서면 반곡리", "59-3"), ("남산면 산수리", "318")],
+                              "사업시행지역 : 국가하천 홍천강-강원특별자치도 홍천군 서면 반곡리 일원")
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(rows[0]["sojaeji"].startswith("강원특별자치도 홍천군 서면 반곡리"))
+        self.assertEqual(rows[1]["sojaeji"], "남산면 산수리 318")  # 대구광역시 동구 같은 본사 기본값을 붙이지 않는다
+        self.assertNotIn("skipped_region", rep)
+
     def test_regular_city_keeps_board_default(self):
-        rows, rep = self._run(False)
+        rows, rep = self._run([("상색리", "204-7"), ("달전리", "405-105")],
+                              "사업시행지역 : 가평군 가평읍 상색리 ~ 춘천시 남산면 서천리", nationwide=False)
         self.assertEqual(len(rows), 2)
         self.assertNotIn("skipped_region", rep)
 
