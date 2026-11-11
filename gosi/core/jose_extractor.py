@@ -1047,6 +1047,7 @@ def apply_declared_locations(text, rows):
         if not sido and cur_sigun and cur_sigun != sigun:
             cur_sido = ""  # 게시판 지자체 기본 시도('대구광역시')는 기본 시군과 짝이다. 다른 시군으로 바꾸면서 그 시도만 남기면 '대구광역시 가평군' 이 된다
         r["sojaeji"] = " ".join(x for x in (sido or cur_sido, sigun, eup, ri) if x) + tail
+        r.pop("region_default", None)  # 문서가 선언한 위치로 시군을 채웠다
     return rows
 
 
@@ -1071,7 +1072,10 @@ class Regions:
     (이 클래스 자체는 고치지 않는다)."""
 
     def __init__(self, sido_name, sigun_name, eupmyeon_ri=None, legal_dongs="", admin_dongs="",
-                 not_region_words="", extra_files=()):
+                 not_region_words="", extra_files=(), nationwide=False):
+        # nationwide=True: 사업지가 전국인 기관(한국부동산원·LH·국방부 등). sido_name/sigun_name 은 본사 소재지일 뿐이라 사업지의 기본값이 아니다.
+        # 문서에서 시군을 찾지 못한 행에 이 기본값을 붙이면 없는 주소가 되므로, 그런 행은 소재지 근거가 없다고 보고 추출을 포기한다.
+        self.nationwide = nationwide
         self.sido_name = sido_name
         self.sigun_name = sigun_name
         self.eups = set((eupmyeon_ri or {}).keys())
@@ -1182,7 +1186,7 @@ class Regions:
             eup = None
         if not dr:
             return {"region": " ".join(x for x in (self.sido_name, self.sigun_name, eup) if x), "status": "BAD",
-                    "note": "리·동을 찾지 못함", "eup": eup, "dr": ""}
+                    "note": "리·동을 찾지 못함", "eup": eup, "dr": "", "default_region": True}
         suffix = dr[-1]
         if self.base_len(dr) == 1:
             notes.append("한글자 지명")
@@ -1223,7 +1227,8 @@ class Regions:
                     notes.append("미등록 리, 읍면 없음")
                     self.candidate(dr, "리")
         region = " ".join(x for x in (self.sido_name, self.sigun_name, eup, dr) if x)
-        return {"region": region, "status": status, "note": "; ".join(notes), "eup": eup, "dr": dr}
+        return {"region": region, "status": status, "note": "; ".join(notes), "eup": eup, "dr": dr,
+                "default_region": not sigun}
 
     def _tail_region(self, chunk):
         m = self._tail_full.search(chunk)
@@ -1358,6 +1363,8 @@ def finalize_rows(rows, regions, sojaeji_with_jibun=True):
         else:
             r["addr_status"], r["addr_note"] = res["status"], res["note"]
             r["sojaeji"] = (res["region"] + " " + j).strip() if sojaeji_with_jibun else res["region"]
+            if getattr(regions, "nationwide", False) and res.get("default_region"):
+                r["region_default"] = True  # 시군 근거가 없어 본사 기본 소재지가 붙은 행. 공고문 문맥으로 못 고치면 추출을 포기한다
         r["pnu_status"] = "UNRESOLVED" if r["addr_status"] == "OK" else "ADDR_CHECK"
         r.setdefault("pnu", "")
     return rows
@@ -1618,6 +1625,15 @@ def extract_from_attachment(data, ext, filename, title, regions, site_name="", c
         text_all = (full_text(ext, data) or "") + " " + (context_text or "")
         if re.search(r"일원|일대|사업\s*시행\s*지역|사업\s*구간", text_all):
             rows = apply_declared_locations(text_all, rows)
+        giveup = [r for r in rows if r.get("region_default")]
+        if giveup:
+            # 사업지가 전국인 기관에서 문서가 시군을 알려 주지 않은 행(예: 제2경춘국도처럼 사업시행지역에 양 끝 리만 있고 표에는 중간 리만 있는 경우).
+            # 본사 소재지를 붙여 없는 주소로 만들지 않고 추출을 포기한다(사용자 지시 2026-11-11). 시군을 알 수 있는 행은 그대로 추출한다.
+            rows = [r for r in rows if not r.get("region_default")]
+            rep["skipped_region"] = len(giveup)
+            rep["detail"] = (rep["detail"] + "; " if rep["detail"] else "") + f"시군 근거 없어 추출 포기 {len(giveup)}행"
+            if not rows:
+                rep["code"] = "NO_REGION"
     return _to_jose_out(rows, filename, site_name, collected_at)
 
 

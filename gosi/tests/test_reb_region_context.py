@@ -131,15 +131,51 @@ class MixedLandObjectSheetTest(unittest.TestCase):
         self.assertTrue(all(r["sojaeji"].startswith("충청남도 천안시 서북구 직산읍 모시리") for r in rows))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class ApplyDoesNotShortenTest(unittest.TestCase):
     def test_full_region_row_is_not_overwritten_by_partial_declaration(self):
         rows = [{"sojaeji": "충청남도 천안시 서북구 직산읍 모시리 115-18", "jibun_incl": "115-18"}]
         apply_declared_locations("위치 및 면적 충남 천안시 서북구 직산읍 모시리 일원 (16필지, 498㎡)", rows)
         self.assertEqual(rows[0]["sojaeji"], "충청남도 천안시 서북구 직산읍 모시리 115-18")
+
+
+class NationwideGiveUpTest(unittest.TestCase):
+    """사업지가 전국인 기관: 문서에서 시군을 못 찾은 행은 본사 기본 소재지를 붙이지 않고 포기한다(사용자 지시 2026-11-11).
+    도로 개설 같은 사업이어도 시군을 알 수 있는 행은 그대로 추출한다."""
+
+    @staticmethod
+    def _xlsx():
+        import io
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["토 지 조 서"] + [None] * 4)
+        ws.append(["연번", "소재지", "지번", "지목", "면적(㎡)"])
+        ws.append([1, "상색리", "204-7", "전", 336])   # 공고문 사업시행지역에 적힌 리
+        ws.append([2, "달전리", "405-105", "답", 120])  # 양 끝 사이의 중간 리: 시군 근거 없음
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def _run(self, nationwide):
+        from core.jose_extractor import Regions, extract_from_attachment
+        rep = {}
+        rows = extract_from_attachment(
+            self._xlsx(), "xlsx", "토지조서.xlsx", "제2경춘국도 도로건설공사", Regions("대구광역시", "동구", nationwide=nationwide),
+            report=rep, context_text="사업시행지역 : 가평군 가평읍 상색리 ~ 춘천시 남산면 서천리 ￭ 사업시행자")
+        return rows, rep
+
+    def test_nationwide_keeps_known_region_and_gives_up_unknown(self):
+        rows, rep = self._run(True)
+        self.assertEqual([r["jibun"] for r in rows], ["204-7"])
+        self.assertTrue(rows[0]["sojaeji"].startswith("가평군 가평읍 상색리"))
+        self.assertEqual(rep.get("skipped_region"), 1)
+
+    def test_regular_city_keeps_board_default(self):
+        rows, rep = self._run(False)
+        self.assertEqual(len(rows), 2)
+        self.assertNotIn("skipped_region", rep)
+
 
 if __name__ == "__main__":
     unittest.main()
