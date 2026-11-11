@@ -612,6 +612,11 @@ def classify_heads(grid, hdr_rows):
         if m:
             prefix = clean(m.group(1))
     cols["loc_prefix"] = prefix
+    # '지번>당초' + '지번>편입' 두 열이면 편입 지번이 보상 대상 필지다(공고문의 '16필지' 도 편입 지번 개수). 분할전/분할후 표와 같게
+    # 편입을 기본 지번으로, 당초를 원지번으로 둔다. '지번>당초' + '지번>변경' 표(포천 등)는 기존대로 당초 우선(변경은 보조).
+    if "jibun" in cols and "jibun_alt" in cols and "편입" in heads[cols["jibun_alt"]] and "당초" in heads[cols["jibun"]]:
+        cols.setdefault("jibun_orig", cols["jibun"])
+        cols["jibun"] = cols.pop("jibun_alt")
     return cols, heads
 
 
@@ -678,7 +683,8 @@ def rows_from_grid(grid, ctx):
     if len(grid) < 2:
         return []
     hdr = None
-    for i in range(1, min(len(grid), 6)):
+    # 제목 2줄 + '사업명:' '사업시행자:' 2줄 + 머리글 2줄 뒤에 자료가 시작하는 표가 있다(한국부동산원 천안 직산 토지·물건 조서 실측 2026-11-11: 7번째 줄).
+    for i in range(1, min(len(grid), 10)):
         if looks_like_data_row(grid[i]) and not is_index_row(grid[i]):
             hdr = i
             break
@@ -770,6 +776,9 @@ def rows_by_cols(grid, hdr, cols, heads, ctx):
         if sec:
             ctx["section"] = sec  # 이 제목 행 아래 행들의 시도·시군·읍면
             continue
+        if any(re.fullmatch(r"대?분류", h or "") and re.search(r"물건|지장물|건축물|건물|수목|공작물|영업|분묘", clean(row[c]))
+               for c, h in enumerate(heads) if c < len(row)):
+            continue  # 토지·물건이 한 시트에 섞인 조서의 '대분류 = 물건' 행
         pre = ""
         m = PARCEL_RE.search(clean(cell))
         if m and m.start() > 0:
@@ -1029,6 +1038,8 @@ def apply_declared_locations(text, rows):
         if ri not in decl:
             continue
         sido, sigun, eup = decl[ri]
+        if sigun in words and (not eup or eup in words):
+            continue  # 행이 이미 선언된 시군·읍면을 적었다('충청남도 천안시 서북구 직산읍 모시리'). 선언의 앞부분만 읽어 덮어쓰면 시도·시가 사라진다
         cur_sigun = next((w for w in words if re.fullmatch(r"[가-힣]{1,5}[시군구]", w)), "")
         if cur_sigun and cur_sigun != sigun and re.search(re.escape(cur_sigun) + r"(?:[가-힣]{1,4}[읍면])?" + re.escape(ri), flat):
             continue  # 행 자신이 다른 시군을 리와 함께 적었다

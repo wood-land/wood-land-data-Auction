@@ -49,10 +49,6 @@ class ApplyContextTest(unittest.TestCase):
         self.assertEqual(rows[0]["sojaeji"], "강원특별자치도 홍천군 서면 반곡리 59-3")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class SplitColumnTableTest(unittest.TestCase):
     """소재지가 '군 | 읍·면 | 리' 열로 나뉘고 값에 접미사가 없는 표(한국부동산원 마일천·십이탄천, 2026-11-11). 이전에는 0행이라 DeepSeek 이 읽었다."""
 
@@ -98,3 +94,52 @@ class SplitColumnTableTest(unittest.TestCase):
         self.assertNotIn("조종읍", rows[0]["sojaeji"])
         self.assertNotIn("조종면", rows[0]["sojaeji"])
         self.assertIn("가평군", rows[0]["sojaeji"])
+
+
+class MixedLandObjectSheetTest(unittest.TestCase):
+    """토지·물건이 한 시트에 섞이고 제목/사업명 줄이 길어 자료가 7번째 줄에서 시작하는 조서(한국부동산원 천안 직산, 2026-11-11).
+    이전에는 자료 행 탐색 범위(앞 6줄) 밖이라 0행이었다. 공고문의 필지 수(16)는 '편입' 지번 개수다."""
+
+    @staticmethod
+    def _xlsx():
+        import io
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["토 지 조 서"] + [None] * 9)
+        ws.append(["토 지 조 서"] + [None] * 9)
+        ws.append(["사 업 명: 직산 도시첨단산업단지 진입도로 개설공사"] + [None] * 9)
+        ws.append(["사업시행자: 천안시"] + [None] * 9)
+        ws.append(["대분류", "소재지", "지번", "지번", "지목", "현황", "용도지역.지구", "면적및수량", "면적및수량", "단위"])
+        ws.append(["대분류", "소재지", "당초", "편입", "지목", "현황", "용도지역.지구", "전체", "편입", "단위"])
+        loc = "충청남도 천안시 서북구 직산읍 모시리"
+        ws.append(["토지", loc, "115-7", "115-18", "임야", "임야", "자연녹지지역", "67", "48", "㎡"])
+        ws.append(["토지", loc, "115-7", "115-18", "임야", "임야", "자연녹지지역", "67", "48", "㎡"])  # 같은 필지의 다른 소유자 행
+        ws.append(["토지", loc, "49-1", "49-4", "대", "임야", "자연녹지지역", "1,041", "11", "㎡"])
+        ws.append(["물건", loc, "115-7", "115-18", "", "주택", "", "1", "1", "동"])  # 물건 행은 필지가 아니다
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def test_land_rows_read_with_incl_jibun_and_objects_skipped(self):
+        from core.jose_extractor import Regions, extract_from_attachment
+        rep = {}
+        rows = extract_from_attachment(self._xlsx(), "xlsx", "2. 토지,물건 조서.xlsx", "직산 도시첨단산업단지 진입도로 개설공사",
+                                       Regions(sido_name="대구광역시", sigun_name="동구"), report=rep)
+        self.assertEqual(rep["code"], "OK")
+        self.assertEqual(sorted(r["jibun"] for r in rows), ["115-18", "49-4"])  # 편입 지번, 소유자 중복·물건 행 제외
+        self.assertTrue(all(r["sojaeji"].startswith("충청남도 천안시 서북구 직산읍 모시리") for r in rows))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class ApplyDoesNotShortenTest(unittest.TestCase):
+    def test_full_region_row_is_not_overwritten_by_partial_declaration(self):
+        rows = [{"sojaeji": "충청남도 천안시 서북구 직산읍 모시리 115-18", "jibun_incl": "115-18"}]
+        apply_declared_locations("위치 및 면적 충남 천안시 서북구 직산읍 모시리 일원 (16필지, 498㎡)", rows)
+        self.assertEqual(rows[0]["sojaeji"], "충청남도 천안시 서북구 직산읍 모시리 115-18")
+
+if __name__ == "__main__":
+    unittest.main()
