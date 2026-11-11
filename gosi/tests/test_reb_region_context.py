@@ -51,3 +51,50 @@ class ApplyContextTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SplitColumnTableTest(unittest.TestCase):
+    """소재지가 '군 | 읍·면 | 리' 열로 나뉘고 값에 접미사가 없는 표(한국부동산원 마일천·십이탄천, 2026-11-11). 이전에는 0행이라 DeepSeek 이 읽었다."""
+
+    @staticmethod
+    def _xlsx(sigun, eup, ri):
+        import io
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["마일천 개선(재해)복구사업"] + [None] * 8)
+        ws.append(["일련번호", "소재지", None, None, None, None, "지목", "지적(㎡)", "편입면적(㎡)"])
+        ws.append([None, "군", "읍•면", "리", "분할전", "분할후", None, None, None])
+        ws.append([1, sigun, eup, ri, "393", "393-6", "대", 2450, 73])
+        ws.append([2, sigun, eup, ri, "393-5", "393-8", "양", 315, 5])
+        ws.merge_cells("A1:I1")
+        ws.merge_cells("B2:F2")
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def _rows(self, sigun, eup, ri, context):
+        from core.jose_extractor import Regions, extract_from_attachment
+        rep = {}
+        rows = extract_from_attachment(self._xlsx(sigun, eup, ri), "xlsx", "토지조서.xlsx", "마일천 개선(재해)복구사업",
+                                       Regions(sido_name="대구광역시", sigun_name="동구"), report=rep, context_text=context)
+        return rows, rep
+
+    def test_bare_values_get_suffix_from_header_and_notice(self):
+        rows, rep = self._rows("가평", "조종", "신하리", "사업시행지역 : 경기도 가평군 조종면 마일리 산270번지 일원")
+        self.assertEqual(rep["code"], "OK")
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r["sojaeji"].startswith("가평군 조종면 신하리") or r["sojaeji"].startswith("경기도 가평군 조종면 신하리") for r in rows))
+        self.assertEqual([r["jibun"] for r in rows], ["393-6", "393-8"])  # 분할후 지번
+
+    def test_suffixed_values_are_kept(self):
+        rows, _ = self._rows("가평군", "상면", "율길리", "")
+        self.assertEqual(len(rows), 2)
+        self.assertIn("가평군 상면 율길리", rows[0]["sojaeji"])
+
+    def test_eupmyeon_without_evidence_is_omitted_not_guessed(self):
+        rows, _ = self._rows("가평", "조종", "신하리", "")  # 본문에 '조종면'/'조종읍' 근거 없음
+        self.assertEqual(len(rows), 2)
+        self.assertNotIn("조종읍", rows[0]["sojaeji"])
+        self.assertNotIn("조종면", rows[0]["sojaeji"])
+        self.assertIn("가평군", rows[0]["sojaeji"])

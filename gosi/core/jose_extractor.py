@@ -21,6 +21,7 @@ jose_extractor.py — 고시/공고 붙임파일에서 "토지조서(jose_rows)"
 
 import io
 import re
+import threading
 import zipfile
 import xml.etree.ElementTree as ET
 
@@ -501,11 +502,11 @@ def is_index_row(row):
 # --- 표 열 이름 판별 규칙 (공백 제거 후 정규식 검색). 새 표 양식이 나오면 여기에 표기를 추가한다. ---
 COLUMN_RULES = {
     "jibun_orig": r"당초지번|원지번|종전지번|분할전|모지번|원래",
-    "jibun":      r"지번|번지",
+    "jibun":      r"지번|번지|분할후|변경후",
     "jimok":      r"지목",
     "area_incl":  r"편입|수용면적|취득면적|보상면적",
     "area_orig":  r"지적|공부|전체면적|원면적|총면적|^면적|>면적",
-    "loc":        r"소재|위치|행정구역|시/면|동/리|읍[,·ㆍ‧]?면|시군|동명|리명|면‧리‧동|면·리·동|(^|>)(시|군|구|읍|면|동|리)$",
+    "loc":        r"소재|위치|행정구역|시/면|동/리|읍[,·ㆍ‧•]?면|시군|동명|리명|면‧리‧동|면·리·동|(^|>)(시|군|구|읍|면|동|리)$",
     "div":        r"(^|>)구분$",
     "owner_div":  r"소유구분|권리구분|소유자구분",
     "owner_grp":  r"소유자|공고대상자|토지주",
@@ -565,7 +566,9 @@ def classify_heads(grid, hdr_rows):
             cols.setdefault("remark", c)
             continue
         other = bool(R["other_grp"].search(h))
-        if "소재" in h and not other:  # '주소>소재지' 처럼 주소 머리글 아래 붙은 소재지 열(안산시 실측)
+        if "소재" in h and not other and not re.search(r"분할[전후]|변경[전후]", h):
+            # '주소>소재지' 처럼 주소 머리글 아래 붙은 소재지 열(안산시 실측). 단 '소재지>분할전'·'소재지>분할후' 는 소재지 그룹 아래의
+            # 지번 열이라 소재지 열로 보지 않는다(한국부동산원 마일천·십이탄천 토지조서 실측 2026-11-11: 지번 열을 못 찾아 0행이었다)
             cols["loc"].append(c)
             continue
         if R["addr"].search(h) and not other and "addr" not in cols and not re.search(r"지번|번지|지목", h):  # '주소>지번' 은 지번 열
@@ -735,6 +738,23 @@ def section_heading(row):
     return ""
 
 
+def _split_loc_value(head, val, notice_text):
+    """소재지가 '군 | 읍·면 | 리' 처럼 열로 나뉜 표의 값(예: '가평', '조종', '신하리')에 접미사를 붙인다.
+    근거: 열 이름이 '군'이면 군, '리'이면 리. '읍·면' 열은 읍인지 면인지 열 이름으로 알 수 없어, 같은 글 본문에 '조종면'처럼 실제로 적혀 있고
+    접미사가 하나뿐일 때만 붙인다(없으면 빈 값 - 시군·리만으로 소재지를 만들고 사업시행지역 문맥이 읍면을 채운다). 이미 접미사가 있으면 그대로 둔다."""
+    v = clean(val)
+    h = (head or "").split(">")[-1]
+    if not v:
+        return v
+    if h in ("시", "군", "구"):
+        return v if re.search(r"[시군구]$", v) else v + h
+    if re.fullmatch(r"읍[,·ㆍ‧•]?면", h):
+        return v if re.search(r"[읍면]$", v) else (_suffix_by_text(v, ("읍", "면"), notice_text) or "")
+    if h in ("리", "동"):
+        return v if re.search(r"[동리가]$", v) else v + h
+    return v
+
+
 def rows_by_cols(grid, hdr, cols, heads, ctx):
     """열 구성(cols)이 정해진 표에서 자료 행을 읽는다. 소유자 '이름'은 저장하지 않고 분류값(owner_type)만 남긴다."""
     jcol = cols.get("jibun", cols.get("jibun_orig"))
@@ -772,7 +792,7 @@ def rows_by_cols(grid, hdr, cols, heads, ctx):
             if not re.fullmatch(r"[\d.\s]*", row[c] or ""):
                 add(row[c])
         for c in cols["loc"]:
-            add(row[c])
+            add(_split_loc_value(heads[c], row[c], ctx.get("notice_text", "")))
         add(pre)
         loc = " ".join(parts)
         if ctx.get("section") and loc and not _HAS_SIGUN_RE.search(loc):
@@ -853,6 +873,9 @@ def project_name_from_title(title):
     return re.sub(r"(공익사업\s*준비를\s*위한\s*)?(토지\s*출입\s*(허가)?\s*)?(보상계획\s*열람\s*)?(공시송달\s*)?공고", "", t).strip() or t
 
 
+_NOTICE_LOCAL = threading.local()  # extract_from_attachment 가 같은 글의 본문(공고문 포함)을 rows_by_cols 의 읍·면 접미사 근거로 넘긴다
+
+
 def rows_from_document_grids(grids, source_file, title=""):
     """grids: [(page_no, table_idx, grid), ...] -> (행 리스트, 해석 못한 표 목록)."""
     ctx_all, rows, debug = {"lastLoc": "", "prev": None}, [], []
@@ -860,7 +883,7 @@ def rows_from_document_grids(grids, source_file, title=""):
     project = project_name_from_grids([g for _, _, g in grids]) or project_name_from_title(title)
     for page, ti, g in grids:
         ctx = {"lastLoc": getattr(g, "heading", "") or heading_from_grid(g) or ctx_all["lastLoc"],
-               "prev": ctx_all["prev"], "debug": debug,
+               "prev": ctx_all["prev"], "debug": debug, "notice_text": getattr(_NOTICE_LOCAL, "text", ""),
                "tag": f"{source_file}#p{page}t{ti + 1}"}
         got = rows_from_grid(g, ctx)
         if ctx.get("skipped_public"):
@@ -1518,7 +1541,11 @@ def extract_from_attachment(data, ext, filename, title, regions, site_name="", c
     if grids is None:
         rep["code"], rep["detail"] = "UNSUPPORTED", f"형식 {ext} 을(를) 표로 읽을 수 없음(또는 확장자와 실제 형식 불일치)"
         return []
-    rows, debug = rows_from_document_grids(grids, filename, title)
+    _NOTICE_LOCAL.text = (context_text or "") + " " + (full_text(ext, data) if not legacy_hwp else "")
+    try:
+        rows, debug = rows_from_document_grids(grids, filename, title)
+    finally:
+        _NOTICE_LOCAL.text = ""
     rep["table_rows"] = len(rows)
     rep["skipped_lots"] = sum(1 for d in debug if d.get("reason") == "non-parcel-lot")
     rep["skipped_public"] = sum(int(d["heads"][0]) for d in debug if d.get("reason") == "public-owner")
