@@ -1007,15 +1007,6 @@ def _label_locations(text):
     return out
 
 
-def has_declared_range(text):
-    """공고문 라벨 위치가 'A ~ B'(양 끝 위치만 적은 범위)로 적혔는가. 양 끝 사이의 중간 리는 시군을 알 수 없다(제2경춘국도: '가평군 가평읍 상색리 ~ 춘천시 남산면 서천리')."""
-    for m in _LABEL_RE.finditer(text or ""):
-        pieces = [x for x in re.split(r"\s*[~∼～]\s*", m.group(1)) if _PIECE_RE.search(re.sub(r"\s*(?:일원|일대).*$", "", x))]
-        if len(pieces) >= 2:
-            return True
-    return False
-
-
 def declared_locations(text):
     """본문에서 '<시도> <시군> [읍면] 리, 리, 리 일원' 으로 선언된 위치 -> {리: (시도, 시군, 읍면)}. 같은 리가 서로 다른 곳으로 선언되면 뺀다."""
     out, bad = {}, set()
@@ -1056,7 +1047,6 @@ def apply_declared_locations(text, rows):
         if not sido and cur_sigun and cur_sigun != sigun:
             cur_sido = ""  # 게시판 지자체 기본 시도('대구광역시')는 기본 시군과 짝이다. 다른 시군으로 바꾸면서 그 시도만 남기면 '대구광역시 가평군' 이 된다
         r["sojaeji"] = " ".join(x for x in (sido or cur_sido, sigun, eup, ri) if x) + tail
-        r.pop("region_default", None)  # 문서가 선언한 위치로 시군을 채웠다
     return rows
 
 
@@ -1195,7 +1185,7 @@ class Regions:
             eup = None
         if not dr:
             return {"region": " ".join(x for x in (self.sido_name, self.sigun_name, eup) if x), "status": "BAD",
-                    "note": "리·동을 찾지 못함", "eup": eup, "dr": "", "default_region": True}
+                    "note": "리·동을 찾지 못함", "eup": eup, "dr": ""}
         suffix = dr[-1]
         if self.base_len(dr) == 1:
             notes.append("한글자 지명")
@@ -1240,8 +1230,7 @@ class Regions:
             region = " ".join(x for x in (eup, dr) if x)
         else:
             region = " ".join(x for x in (self.sido_name, self.sigun_name, eup, dr) if x)
-        return {"region": region, "status": status, "note": "; ".join(notes), "eup": eup, "dr": dr,
-                "default_region": not sigun}
+        return {"region": region, "status": status, "note": "; ".join(notes), "eup": eup, "dr": dr}
 
     def _tail_region(self, chunk):
         m = self._tail_full.search(chunk)
@@ -1376,8 +1365,6 @@ def finalize_rows(rows, regions, sojaeji_with_jibun=True):
         else:
             r["addr_status"], r["addr_note"] = res["status"], res["note"]
             r["sojaeji"] = (res["region"] + " " + j).strip() if sojaeji_with_jibun else res["region"]
-            if getattr(regions, "nationwide", False) and res.get("default_region"):
-                r["region_default"] = True  # 시군 근거가 없어 본사 기본 소재지가 붙은 행. 공고문 문맥으로 못 고치면 추출을 포기한다
         r["pnu_status"] = "UNRESOLVED" if r["addr_status"] == "OK" else "ADDR_CHECK"
         r.setdefault("pnu", "")
     return rows
@@ -1638,15 +1625,8 @@ def extract_from_attachment(data, ext, filename, title, regions, site_name="", c
         text_all = (full_text(ext, data) or "") + " " + (context_text or "")
         if re.search(r"일원|일대|사업\s*시행\s*지역|사업\s*구간", text_all):
             rows = apply_declared_locations(text_all, rows)
-        # 사용자 지시 2026-11-11: 사업시행지역이 양 끝 리 범위('A ~ B')로만 적힌 글에서, 그 선언 밖의 리(중간 리)는 시군을 알 수 없어 추출을 포기한다.
-        # 그 밖에 토지조서에 주소(읍면·리·지번)가 있으면 시군이 없어도 문서에 적힌 그대로 추출한다(PNU 는 변환 단계가 맡는다).
-        giveup = [r for r in rows if r.get("region_default")] if has_declared_range(text_all) else []
-        if giveup:
-            rows = [r for r in rows if not r.get("region_default")]
-            rep["skipped_region"] = len(giveup)
-            rep["detail"] = (rep["detail"] + "; " if rep["detail"] else "") + f"사업시행지역이 양 끝 리 범위라 중간 리 {len(giveup)}행 추출 포기"
-            if not rows:
-                rep["code"] = "NO_REGION"
+        # 사용자 지시 2026-11-11: 토지조서에서 읽을 수 있는 행은 모두 추출한다. 전국 단위 기관(Regions nationwide)은 문서에 시군이 없어도
+        # 본사 기본 소재지를 붙이지 않고 문서에 적힌 읍면·리·지번 그대로 추출하고, PNU 는 변환 단계(카카오 전국 검색)가 맡는다.
     return _to_jose_out(rows, filename, site_name, collected_at)
 
 

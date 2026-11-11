@@ -139,9 +139,9 @@ class ApplyDoesNotShortenTest(unittest.TestCase):
         self.assertEqual(rows[0]["sojaeji"], "충청남도 천안시 서북구 직산읍 모시리 115-18")
 
 
-class NationwideGiveUpTest(unittest.TestCase):
-    """사업지가 전국인 기관(2026-11-11 사용자 지시): 사업시행지역이 양 끝 리 범위('A ~ B')면 그 밖의 중간 리는 추출을 포기하고,
-    그 밖에 토지조서에 주소(읍면·리·지번)가 있으면 시군이 없어도 문서에 적힌 그대로 추출한다(본사 기본 소재지는 붙이지 않는다)."""
+class NationwideExtractAllTest(unittest.TestCase):
+    """사업지가 전국인 기관(2026-11-11 사용자 지시): 토지조서에서 읽을 수 있는 행은 모두 추출한다. 문서에 시군이 없으면 본사 기본 소재지
+    (대구 동구 등)를 붙이지 않고 문서에 적힌 읍면·리·지번 그대로 둔다. 사업시행지역이 양 끝 리 범위여도 포기하지 않는다."""
 
     @staticmethod
     def _xlsx(rows):
@@ -164,26 +164,26 @@ class NationwideGiveUpTest(unittest.TestCase):
                                       report=rep, context_text=context)
         return got, rep
 
-    def test_range_declared_gives_up_middle_ri_only(self):
+    def test_range_declared_keeps_all_rows(self):
         rows, rep = self._run([("상색리", "204-7"), ("달전리", "405-105")],
                               "사업시행지역 : 가평군 가평읍 상색리 ~ 춘천시 남산면 서천리 ￭ 사업시행자")
-        self.assertEqual([r["jibun"] for r in rows], ["204-7"])
+        self.assertEqual([r["jibun"] for r in rows], ["204-7", "405-105"])
         self.assertTrue(rows[0]["sojaeji"].startswith("가평군 가평읍 상색리"))
-        self.assertEqual(rep.get("skipped_region"), 1)
+        self.assertEqual(rows[1]["sojaeji"], "달전리 405-105")  # 시군 근거가 없어도 추출, 본사 기본값은 붙이지 않음
+        self.assertNotIn("skipped_region", rep)
 
-    def test_address_without_sigun_is_extracted_as_written_when_no_range(self):
-        rows, rep = self._run([("서면 반곡리", "59-3"), ("남산면 산수리", "318")],
-                              "사업시행지역 : 국가하천 홍천강-강원특별자치도 홍천군 서면 반곡리 일원")
+    def test_address_without_sigun_is_extracted_as_written(self):
+        rows, _ = self._run([("서면 반곡리", "59-3"), ("남산면 산수리", "318")],
+                            "사업시행지역 : 국가하천 홍천강-강원특별자치도 홍천군 서면 반곡리 일원")
         self.assertEqual(len(rows), 2)
         self.assertTrue(rows[0]["sojaeji"].startswith("강원특별자치도 홍천군 서면 반곡리"))
-        self.assertEqual(rows[1]["sojaeji"], "남산면 산수리 318")  # 대구광역시 동구 같은 본사 기본값을 붙이지 않는다
-        self.assertNotIn("skipped_region", rep)
+        self.assertEqual(rows[1]["sojaeji"], "남산면 산수리 318")
 
     def test_regular_city_keeps_board_default(self):
-        rows, rep = self._run([("상색리", "204-7"), ("달전리", "405-105")],
-                              "사업시행지역 : 가평군 가평읍 상색리 ~ 춘천시 남산면 서천리", nationwide=False)
+        rows, _ = self._run([("상색리", "204-7"), ("달전리", "405-105")],
+                            "사업시행지역 : 가평군 가평읍 상색리 ~ 춘천시 남산면 서천리", nationwide=False)
         self.assertEqual(len(rows), 2)
-        self.assertNotIn("skipped_region", rep)
+        self.assertTrue(rows[1]["sojaeji"].startswith("대구광역시 동구"))
 
 
 if __name__ == "__main__":
