@@ -136,6 +136,26 @@ def fetch(session, url, out_dir, tag):
     return html, info
 
 
+def fetch_with_retry(session, url, out_dir, tag, retries=4, wait=6, sleep=None):
+    """접속 오류(연결 끊김·시간초과)면 잠시 쉬었다 다시 연다. 러너 IP 에 따라 간헐적으로 끊는 사이트가 있어 한 번의 실패로 진단을 포기하지 않는다.
+    -> (html, 응답 정보, 시도 기록 리스트). 모두 실패하면 마지막 예외를 던진다."""
+    import time
+    sleep = sleep or time.sleep
+    attempts = []
+    for i in range(1, retries + 1):
+        try:
+            html, info = fetch(session, url, out_dir, tag)
+            attempts.append(f"{i}번째 시도: 성공(HTTP {info['status']})")
+            return html, info, attempts
+        except Exception as e:
+            attempts.append(f"{i}번째 시도: {type(e).__name__}: {str(e)[:120]}")
+            err = e
+            if i < retries:
+                sleep(wait)
+    err.attempts = attempts
+    raise err
+
+
 def parser_repro(session, url):
     """현재 공보 파서가 이 주소에서 읽는 행을 재현한다(오류도 그대로 보여 준다)."""
     try:
@@ -162,12 +182,15 @@ def main(argv=None):
     report = [f"진단 주소: {a.url}"]
     summary = {"url": a.url}
     try:
-        html, info = fetch(session, a.url, out_dir, "page")
+        html, info, attempts = fetch_with_retry(session, a.url, out_dir, "page")
     except Exception as e:
-        msg = f"[접속 실패] {type(e).__name__}: {str(e)[:300]}"
+        tries = getattr(e, "attempts", [])
+        msg = (f"[접속 실패] {type(e).__name__}: {str(e)[:300]}\n" + "\n".join(f"  {t}" for t in tries) +
+               "\n  -> 이 러너 IP 에서 사이트가 연결을 끊는 것으로 보입니다. 워크플로를 다시 실행하면 다른 러너(다른 IP)로 시도합니다.")
         print(msg)
         (out_dir / "summary.txt").write_text("\n".join(report + [msg]), encoding="utf-8")
         return 1
+    report.append("접속 시도: " + " / ".join(attempts))
     page = summarize(html, info["final_url"])
     summary["page"] = {"response": info, **page}
     report.append(render("페이지", page, info))

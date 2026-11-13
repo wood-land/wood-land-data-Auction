@@ -93,5 +93,45 @@ class EndToEndTest(unittest.TestCase):
             self.assertEqual(D.main(["https://evil.example.com/", "--out", d]), 2)
 
 
+class _FakeResp:
+    status_code = 200
+    url = "https://www.busan.go.kr/x"
+    headers = {"content-type": "text/html; charset=utf-8"}
+    encoding = "utf-8"
+    history = []
+    content = "<html><title>ok</title></html>".encode("utf-8")
+
+
+class _FlakySession:
+    def __init__(self, fails):
+        self.fails, self.calls = fails, 0
+
+    def get(self, url, **kw):
+        self.calls += 1
+        if self.calls <= self.fails:
+            import requests
+            raise requests.exceptions.ConnectionError("Connection reset by peer")
+        return _FakeResp()
+
+
+class RetryTest(unittest.TestCase):
+    def test_retries_until_success(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = _FlakySession(fails=2)
+            html, info, attempts = D.fetch_with_retry(s, "https://www.busan.go.kr/x", Path(d), "page", retries=4, wait=0, sleep=lambda w: None)
+            self.assertEqual(s.calls, 3)
+            self.assertIn("ok", html)
+            self.assertEqual(len(attempts), 3)
+            self.assertIn("성공", attempts[-1])
+
+    def test_all_failures_raise_with_attempt_log(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = _FlakySession(fails=9)
+            with self.assertRaises(Exception) as cm:
+                D.fetch_with_retry(s, "https://www.busan.go.kr/x", Path(d), "page", retries=3, wait=0, sleep=lambda w: None)
+            self.assertEqual(s.calls, 3)
+            self.assertEqual(len(cm.exception.attempts), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
