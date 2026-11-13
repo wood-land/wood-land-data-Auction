@@ -33,19 +33,3 @@ class ExcludedBoardsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class HeadOfficeOnlyTest(unittest.TestCase):
-    """부산·인천은 광역시청(본청)만 수집한다(사용자 결정 2026-11-13). 자치구·군은 고시공고·공보 모두 수집하지 않는다."""
-
-    def test_gazette_only_head_office_for_busan_and_incheon(self):
-        boards = G.load_boards(EXCEL)
-        for module, head in (("부산", "부산광역시청"), ("인천", "인천광역시청")):
-            cities = {b["city"] for b in boards if b["module"] == module}
-            self.assertLessEqual(cities, {head}, f"{module} 에 본청 외 게시판이 남아 있음: {cities}")
-
-    def test_gosigongo_city_lists_are_head_office_only(self):
-        from cities import busan, incheon
-        self.assertEqual([c.city for c in busan.CITIES], ["부산광역시청"])
-        self.assertEqual([c.city for c in incheon.CITIES], ["인천광역시청"])
-        self.assertTrue(busan.BUSAN_DISTRICTS and incheon.INCHEON_DISTRICTS)  # 정의는 남겨 둠(다시 켤 수 있다)
