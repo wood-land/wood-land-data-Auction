@@ -131,4 +131,8 @@ BUPYEONG = City(
     adapter="ntis_ofr",
 )
 
-CITIES = [GANGHWA, ONGJIN, JEMULPO, INCHEON_CITY, GYEYANG, NAMDONG, YEONSU, BUPYEONG]
+# 사용자 결정 2026-11-13(history 251/25): 인천은 광역시청(본청)만 수집한다. 자치구·군은 수집하지 않는다.
+# 아래 자치구·군 City 정의는 다시 켤 수 있게 남겨 두었다 - 켜려면 이 목록에 이름만 추가한다.
+INCHEON_DISTRICTS = [GANGHWA, ONGJIN, JEMULPO, GYEYANG, NAMDONG, YEONSU, BUPYEONG]
+
+CITIES = [INCHEON_CITY]

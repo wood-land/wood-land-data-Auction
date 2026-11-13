@@ -80,6 +80,11 @@ def new_session():
     return s
 
 
+# 사용자 결정 2026-11-13: 부산·인천은 광역시청(본청) 공보만 수집하고 자치구·군 공보는 수집하지 않는다(고시공고도 cities/busan.py·incheon.py 에서 뺐다).
+# 키는 공보 엑셀의 '권역(파일)', 값은 수집할 지자체 이름. 다시 켜려면 이 항목을 지운다.
+HEAD_OFFICE_ONLY = {"부산": "부산광역시청", "인천": "인천광역시청"}
+
+
 def load_boards(excel_path):
     wb = load_workbook(excel_path, data_only=True)
     ws = wb["공보게시판"]
@@ -93,6 +98,9 @@ def load_boards(excel_path):
         url = (user_url or "").strip() if user_url else ""
         judged = row[idx["판정"]]
         if str(judged or "").startswith("제외"):
+            continue
+        only = HEAD_OFFICE_ONLY.get(row[idx["권역(파일)"]])
+        if only and row[idx["지자체"]] != only:
             continue
         if not url and judged != "미발견":
             url = row[idx["게시판 URL"]] or ""
