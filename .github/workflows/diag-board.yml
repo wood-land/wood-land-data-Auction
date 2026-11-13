@@ -6,8 +6,6 @@ name: diag-board
 # 대상은 *.go.kr 만 허용한다(gosi/diag_fetch.py, law.md 6절).
 
 on:
-  push:   # 임시(병합 전 검증용, 검증 후 제거): 이 브랜치에 푸시하면 기본 주소로 한 번 실행한다
-    branches: [claude/diag-board-workflow]
   workflow_dispatch:
     inputs:
       url:
@@ -37,7 +35,7 @@ jobs:
 
       - name: Diagnose
         env:
-          DIAG_URL: ${{ github.event.inputs.url || 'https://www.busan.go.kr/nbgosi' }}   # 셸에 직접 끼워 넣지 않고 환경변수로만 넘긴다
+          DIAG_URL: ${{ github.event.inputs.url }}   # 셸에 직접 끼워 넣지 않고 환경변수로만 넘긴다
         run: python diag_fetch.py "$DIAG_URL" --out diag_out
 
       - name: Upload result
