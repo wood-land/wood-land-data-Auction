@@ -133,5 +133,28 @@ class RetryTest(unittest.TestCase):
             self.assertEqual(len(cm.exception.attempts), 3)
 
 
+
+class NoticeDiagHelpersTest(unittest.TestCase):
+    """diag_notice.py: 본문 일치 주변 추출과 입력 검증(네트워크 없이)."""
+
+    def test_context_snippets(self):
+        import diag_notice as N
+        text = "앞 글자 " * 30 + "기정 주안동 599-40 임야" + " 뒤 글자" * 30 + " 변경 주안동 606-7 대"
+        got = N.context_snippets(text, r"주안동", width=10)
+        self.assertEqual(len(got), 2)
+        self.assertIn("기정 주안동 599-40", got[0])
+        self.assertIn("변경 주안동 606-7", got[1])
+
+    def test_snippets_skip_overlapping_matches_and_respect_limit(self):
+        import diag_notice as N
+        text = "주안동 " * 50
+        self.assertLessEqual(len(N.context_snippets(text, r"주안동", width=5, limit=3)), 3)
+
+    def test_non_go_kr_and_bad_post_id_are_refused(self):
+        import diag_notice as N
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(N.main(["--board-url", "https://evil.example.com/", "--post-id", "1", "--out", d]), 2)
+            self.assertEqual(N.main(["--board-url", "https://www.incheon.go.kr/IC010303", "--post-id", "1; rm -rf /", "--out", d]), 2)
+
 if __name__ == "__main__":
     unittest.main()
