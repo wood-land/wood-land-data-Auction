@@ -393,6 +393,8 @@ TEMPLATE_HEADERS = [
 ]
 
 FETCH_DETAIL_DOCS = True        # 상세페이지(필지별 주소/참고사항/등기요약)까지 받아올지 여부
+# 테스트용: 이 값(>0)이면 물건종류마다 경매 신규 N건만 수집하고 끝낸다(공매 생략, 이전 탭 정리 안 함).
+TEST_MAX_NEW_ITEMS = int((os.environ.get("TEST_MAX_NEW_ITEMS") or "0").strip() or 0)
 DETAIL_PAGE_DELAY = (2.0, 4.0)  # 상세페이지 요청 사이 랜덤 대기시간(초) 범위 - 서버 부하 방지
 PDF_DOWNLOAD_DELAY = (1.0, 2.5) # 토지등기 PDF 다운로드 사이 랜덤 대기시간(초) 범위 (지분 물건만 해당)
 PAGE_CLICK_DELAY = (1.5, 3.0)   # 목록 페이지 넘길 때 랜덤 대기시간(초) 범위
@@ -2987,6 +2989,7 @@ def main():
             seen_tids = set()
             doc_session = None
             total_new_count = 0
+            test_limit_hit = False
             total_skip_existing = 0
             total_skip_area = 0
             total_skip_fail_count = 0  # (2026-10-04 추가) 유찰횟수 1~2회 조건 불일치로 제외된 건수
@@ -3113,11 +3116,19 @@ def main():
 
                             maybe_autosave(sheet, category_ws, save_path, total_new_count, gsheet_sync_state)
 
+                            if TEST_MAX_NEW_ITEMS and total_new_count >= TEST_MAX_NEW_ITEMS:
+                                print(f"[테스트] 신규 {total_new_count}건 수집해 {ctgr_label} 경매 수집을 여기서 멈춥니다.")
+                                test_limit_hit = True
+                                break
+
                         except StaleElementReferenceException:
                             raise
                         except Exception as e:
                             print(f"[{ctgr_label}][tid={tid}] 이 물건 처리 중 오류가 발생해 건너뜁니다: {e}")
                             continue
+
+                    if test_limit_hit:
+                        break
 
                     if page_extracted_count == 0 and page_num > 1:
                         print(f"[{ctgr_label}] 이 페이지에서 추출된 데이터가 없어 이 물건종류 수집을 종료합니다.")
@@ -3146,7 +3157,7 @@ def main():
                 wait_for_list(driver)
                 time.sleep(1)
 
-                for prptdvsn_value, prptdvsn_label in PA_PRPTDVSN_VALUES:
+                for prptdvsn_value, prptdvsn_label in ([] if TEST_MAX_NEW_ITEMS else PA_PRPTDVSN_VALUES):   # 테스트 모드는 공매 생략
                     try:
                         print(f"\n[{TYPE_B_LABEL}/{ctgr_label}] 자산구분 '{prptdvsn_label}' 검색 시작...")
                         apply_filters_pa(
@@ -3307,7 +3318,7 @@ def main():
 
     # Actions(예약/수동) 실행은 항상 최신 탭만 남긴다 - 과거 데이터는 필요 없다는 요청.
     # 오늘 탭이 실제로 만들어진 물건종류에 한해, 그보다 이전 날짜의 같은 종류 탭(본 탭 + _등기부상세)을 지운다.
-    if os.environ.get("GITHUB_ACTIONS") == "true" and GOOGLE_SHEETS_ENABLED and google_sh is not None:
+    if os.environ.get("GITHUB_ACTIONS") == "true" and GOOGLE_SHEETS_ENABLED and google_sh is not None and not TEST_MAX_NEW_ITEMS:
         cleanup_old_factory_tabs(google_sh, [c[0] for c in category_summaries])
 
     if category_summaries:

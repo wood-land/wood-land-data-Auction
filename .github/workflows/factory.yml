@@ -18,6 +18,10 @@ on:
         description: "건물면적 상한 (평)"
         required: false
         default: "200"
+      test_max_items:
+        description: "테스트용: 물건종류마다 경매 신규 N건만 수집(공매 생략, 이전 탭 삭제 안 함). 0 이면 전체 수집"
+        required: false
+        default: "0"
 
 jobs:
   crawl:
@@ -69,4 +73,5 @@ jobs:
           GOOGLE_SA_KEY_JSON: ${{ secrets.GOOGLE_SA_KEY_JSON_ADMIN }}
           MINB_AMT_END: ${{ github.event.inputs.minb_amt_end || '1000000000' }}
           AREA_PYEONG_END: ${{ github.event.inputs.area_pyeong_end || '200' }}
+          TEST_MAX_NEW_ITEMS: ${{ github.event.inputs.test_max_items || '0' }}
         run: python factory_crawler.py
