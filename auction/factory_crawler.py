@@ -2955,6 +2955,15 @@ def main():
             tab_name = f"{오늘날짜_숫자만}_{ctgr_label}"
             print(f"\n{'='*70}\n[{ctgr_label}] 구글시트 탭 '{tab_name}' 수집 시작\n{'='*70}")
 
+            # (v2 수정) 앞 물건종류의 공매 수집이 끝나면 브라우저가 공매 목록 화면에 있다. 경매 목록 화면으로
+            # 되돌아가지 않으면 두 번째 물건종류(근린상가)의 경매 필터(#endDt 등)를 못 찾아 0건이 된다.
+            try:
+                driver.get(BASE_URL)
+                wait_for_list(driver)
+                time.sleep(1)
+            except Exception as e:
+                print(f"[{ctgr_label}] 경매 목록 화면 이동 실패(계속 진행): {e}")
+
             category_ws = None
             existing_case_numbers = set()
             existing_rows = []
