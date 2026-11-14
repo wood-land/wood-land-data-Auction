@@ -1,0 +1,65 @@
+name: factory-weekly
+
+# 공장/근린상가 진행물건 수집(+ NPL 겹침 열). 지금은 수동 실행(workflow_dispatch)만 켜져 있다.
+# 매주 자동 실행을 켜려면 아래 schedule 블록의 주석(#)을 풀면 된다.
+# 권장: NPL 목록을 PC에서 수집해 둔 뒤(주 1회) 그 이후 시각으로 잡는다.
+on:
+  # schedule:
+  #   # 토요일 낮 12:00(KST) = 토요일 03:00 UTC  (auction-weekly 의 토요일 새벽 실행이 끝난 뒤)
+  #   - cron: "0 3 * * 6"
+  workflow_dispatch:
+    inputs:
+      minb_amt_end:
+        description: "최저가격 상한 (원 단위, 사이트 옵션 값. 예: 1000000000 = 10억)"
+        required: false
+        default: "1000000000"
+      area_pyeong_end:
+        description: "건물면적 상한 (평)"
+        required: false
+        default: "200"
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: auction
+    timeout-minutes: 300
+    concurrency:
+      # auction-weekly 와 같은 그룹: 같은 사이트에 로그인 세션이 동시에 둘 열리지 않도록 순서대로 실행한다.
+      group: weekly-data-collection
+      cancel-in-progress: false
+
+    steps:
+      - name: 저장소 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 패키지 설치
+        run: pip install -r requirements.txt
+
+      - name: 브라우저 설치
+        uses: browser-actions/setup-chrome@v1
+
+      - name: 실행
+        env:
+          SITE_DOMAIN: ${{ secrets.SITE_DOMAIN }}
+          SITE_LOGIN_ID: ${{ secrets.SITE_LOGIN_ID }}
+          SITE_LOGIN_PW: ${{ secrets.SITE_LOGIN_PW }}
+          TYPE_A_LABEL: ${{ secrets.TYPE_A_LABEL }}
+          TYPE_B_LABEL: ${{ secrets.TYPE_B_LABEL }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          # 공장/근린상가 탭을 따로 둘 스프레드시트가 있으면 Secrets 에 FACTORY_SHEET_ID 를 추가한다(없으면 GOOGLE_SHEET_ID 사용)
+          FACTORY_SHEET_ID: ${{ secrets.FACTORY_SHEET_ID }}
+          # NPL 목록이 저장된 스프레드시트 ID. 비어 있으면 NPL_겹침 열은 비워 둔다.
+          # 서비스 계정(GOOGLE_SA_KEY_JSON_ADMIN)이 그 시트에 '편집자' 이상으로 공유되어 있어야 읽을 수 있다.
+          NPL_SHEET_ID: ${{ secrets.NPL_SHEET_ID }}
+          SHARE_EMAIL: ${{ secrets.SHARE_EMAIL }}
+          GOOGLE_SA_KEY_JSON: ${{ secrets.GOOGLE_SA_KEY_JSON_ADMIN }}
+          MINB_AMT_END: ${{ github.event.inputs.minb_amt_end || '1000000000' }}
+          AREA_PYEONG_END: ${{ github.event.inputs.area_pyeong_end || '200' }}
+        run: python factory_crawler.py
