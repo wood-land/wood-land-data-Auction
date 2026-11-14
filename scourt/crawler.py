@@ -1852,7 +1852,6 @@ def get_known_seq_ids(gws_list) -> set:
 
 # ── 파산공매 결과 탭: 파산공고_YYMMDD (실행일 KST). 같은 날 다시 돌리면 같은 탭을 다시 만든다 ──
 MERGED_TAB_PREFIX = "파산공고_"
-LEGACY_MERGED_TAB = "파산공매"   # 예전 고정 이름 탭 (이전 결과 탭이 없을 때 PNU 캐시용으로만 읽음)
 
 
 def merged_tab_name(dt=None) -> str:
@@ -1861,13 +1860,11 @@ def merged_tab_name(dt=None) -> str:
 
 
 def previous_merged_ws(sh, today_name: str):
-    """오늘 탭을 뺀 가장 최근 '파산공고_YYMMDD' 탭. 없으면 옛 '파산공매' 탭. 둘 다 없으면 None."""
+    """오늘 탭을 뺀 가장 최근 '파산공고_YYMMDD' 탭. 없으면 None."""
     try:
         tabs = [w for w in sh.worksheets()
                 if re.fullmatch(MERGED_TAB_PREFIX + r"\d{6}", w.title.strip()) and w.title.strip() != today_name]
-        if tabs:
-            return max(tabs, key=lambda w: w.title.strip())
-        return sh.worksheet(LEGACY_MERGED_TAB)
+        return max(tabs, key=lambda w: w.title.strip()) if tabs else None
     except Exception:
         return None
 
@@ -2424,7 +2421,6 @@ def delete_old_merged_tabs(sh, today_name: str, expected_rows: int) -> int:
     ⚠️ 안전장치: 오늘 탭이 실제로 존재하고, 내용(헤더 + 데이터 행)이 방금 쓴 행 수와
     일치하는 것을 시트에서 다시 읽어 확인한 경우에만 지운다. 하나라도 어긋나면 아무것도
     지우지 않는다. (데이터 0행이면 확인할 내용이 없으므로 지우지 않음)
-    옛 고정 이름 '파산공매' 탭은 건드리지 않는다.
     """
     try:
         if expected_rows < 1:
