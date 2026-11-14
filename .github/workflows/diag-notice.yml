@@ -6,8 +6,6 @@ name: diag-notice
 # 대상은 *.go.kr 만 허용한다(gosi/diag_notice.py -> diag_fetch.host_allowed, law.md 6절).
 
 on:
-  push:   # 임시(병합 전 검증용, 검증 후 제거): 이 브랜치에 푸시하면 시보 제2489호(주안동)로 한 번 실행한다
-    branches: [claude/diag-notice-and-wide-region]
   workflow_dispatch:
     inputs:
       board_url:
@@ -68,13 +66,13 @@ jobs:
 
       - name: Diagnose notice
         env:   # 입력은 셸에 직접 끼워 넣지 않고 환경변수로만 넘긴다
-          BOARD_URL: ${{ github.event.inputs.board_url || 'https://www.incheon.go.kr/IC010303' }}
-          POST_ID: ${{ github.event.inputs.post_id || '3092904' }}
-          GREP: ${{ github.event.inputs.grep || '주안동' }}
-          DAYS: ${{ github.event.inputs.days || '60' }}
-          MODULE: ${{ github.event.inputs.module || '인천' }}
-          CITY: ${{ github.event.inputs.city || '인천광역시청' }}
-          KIND: ${{ github.event.inputs.kind || '시보' }}
+          BOARD_URL: ${{ github.event.inputs.board_url }}
+          POST_ID: ${{ github.event.inputs.post_id }}
+          GREP: ${{ github.event.inputs.grep }}
+          DAYS: ${{ github.event.inputs.days }}
+          MODULE: ${{ github.event.inputs.module }}
+          CITY: ${{ github.event.inputs.city }}
+          KIND: ${{ github.event.inputs.kind }}
           PYTHONIOENCODING: utf-8
         run: python diag_notice.py --board-url "$BOARD_URL" --post-id "$POST_ID" --grep "$GREP" --days "$DAYS" --module "$MODULE" --city "$CITY" --kind "$KIND" --out diag_out
 
