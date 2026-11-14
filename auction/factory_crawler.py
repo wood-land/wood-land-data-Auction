@@ -2765,6 +2765,26 @@ def annotate_npl_column(rows, google_sh):
     return hits
 
 
+def cleanup_old_factory_tabs(google_sh, labels):
+    """'YYYYMMDD_<종류>' 와 'YYYYMMDD_<종류>_등기부상세' 탭 중 오늘보다 오래된 것을 지운다(labels 에 든 종류만).
+    오늘 날짜 탭이 시트에 없으면(= 이번 실행이 그 종류를 저장하지 못함) 그 종류는 지우지 않는다."""
+    try:
+        worksheets = google_sh.worksheets()
+        titles = {w.title for w in worksheets}
+        for label in labels:
+            if f"{오늘날짜_숫자만}_{label}" not in titles:
+                print(f"[정리] 오늘 탭 '{오늘날짜_숫자만}_{label}' 이 없어 '{label}' 의 이전 탭은 지우지 않습니다.")
+                continue
+            pat = re.compile(rf"^(\d{{8}})_{re.escape(label)}(?:_등기부상세)?$")
+            for ws in worksheets:
+                m = pat.match(ws.title)
+                if m and m.group(1) < 오늘날짜_숫자만:
+                    google_sh.del_worksheet(ws)
+                    print(f"[정리] 이전 탭 삭제: {ws.title}")
+    except Exception as e:
+        print(f"[정리] 이전 탭 정리 중 오류(수집 결과에는 영향 없음): {e}")
+
+
 def save_registry_detail_rows_to_gsheet(google_sh, rows, tab_name):
     """등기부/입찰이력 상세 추출 결과를 지정한 탭에 저장한다(기존 내용은 지우고 새로 씀 -
     같은 날 재실행해도 중복/열밀림이 생기지 않도록). google_sh는 main()에서 이미 연결한
@@ -3284,6 +3304,11 @@ def main():
         print("\n사용자가 실행을 중지했습니다.")
     finally:
         driver.quit()
+
+    # Actions(예약/수동) 실행은 항상 최신 탭만 남긴다 - 과거 데이터는 필요 없다는 요청.
+    # 오늘 탭이 실제로 만들어진 물건종류에 한해, 그보다 이전 날짜의 같은 종류 탭(본 탭 + _등기부상세)을 지운다.
+    if os.environ.get("GITHUB_ACTIONS") == "true" and GOOGLE_SHEETS_ENABLED and google_sh is not None:
+        cleanup_old_factory_tabs(google_sh, [c[0] for c in category_summaries])
 
     if category_summaries:
         print(f"\n{'='*70}\n전체 요약\n{'='*70}")
