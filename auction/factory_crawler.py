@@ -2672,6 +2672,12 @@ def _npl_int(v):
     return int(d) if d else None
 
 
+def _npl_date_key(v):
+    """'2026.11.16 (월) (10:00)' / '2026-12-01' -> '20261116' / '20261201' (못 읽으면 '')."""
+    m = re.search(r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})", str(v or ""))
+    return f"{m.group(1)}{int(m.group(2)):02d}{int(m.group(3)):02d}" if m else ""
+
+
 def _npl_tokens(addr):
     return {w for w in re.findall(r"[가-힣0-9]+", str(addr or "")) if len(w) >= 2}
 
@@ -2725,14 +2731,14 @@ def npl_overlap_text(reg_row, index):
     if not key or key not in index:
         return ""
     my_price = _npl_int(reg_row[8])
-    my_date = re.sub(r"[^\d]", "", str(reg_row[5] or ""))[-6:]
+    my_date = _npl_date_key(reg_row[5])
     my_tok = _npl_tokens(reg_row[6])
     best = None
     for c in index[key]:
         proofs = []
         if my_price and _npl_int(c.get("감정가")) == my_price:
             proofs.append("감정가")
-        c_date = re.sub(r"[^\d]", "", c.get("매각기일", ""))[-6:]
+        c_date = _npl_date_key(c.get("매각기일", ""))
         if my_date and c_date and my_date == c_date:
             proofs.append("매각기일")
         if len(my_tok & _npl_tokens(c.get("소재지"))) >= 2:
