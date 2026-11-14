@@ -952,6 +952,22 @@ _FOREIGN_RE = re.compile(
 # 실측(2026-10-17): 접미사 없이 '당동'만 읽으면 동 이름으로 오인되고 면이 빠진다. 근거 두 가지만 인정한다(추측 금지).
 BARE_HEADER_RE = re.compile(r"소\s*재\s*지(?:(?!\d).){0,60}?(?<![가-힣])면(?![가-힣])(?:(?!\d).){0,20}?(?<![가-힣])리(?![가-힣])", re.S)
 BARE_PAIR_RE = re.compile(r"(?<![가-힣])([가-힣]{1,4})\s+([가-힣]{1,5})\s*$")
+_SOJAEJI_WORD_RE = re.compile(r"소\s*재\s*지")
+
+
+def bare_cue_checker(text):
+    """text 안에서 '이 위치의 행은 면·리 열 표(머리글에 면/리 열 이름)에 속하는가'를 판정하는 함수를 돌려준다.
+    머리글 단서(BARE_HEADER_RE)는 **그 행이 속한 표의 머리글**(바로 앞의 '소재지' 머리글)에서만 인정한다. 글 전체에서 한 번만 찾으면
+    한 호 전체가 '공고 1건'으로 합쳐진 시보(인천 제2489호 14만 자)에서 앞쪽 다른 표의 '읍·면·리' 머리글 단서가 뒤의 모든 표에 퍼져
+    '기정 주안동' -> '기정면 주안동리', '연수구 동춘동' -> '연수구면 동춘동리' 같은 없는 지명을 만들었다(2026-11-14 실제 본문 재현)."""
+    heads = [m.start() for m in _SOJAEJI_WORD_RE.finditer(text or "")]
+    cues = {m.start() for m in BARE_HEADER_RE.finditer(text or "")}
+    from bisect import bisect_right
+
+    def has_cue(pos):
+        i = bisect_right(heads, pos) - 1
+        return i >= 0 and heads[i] in cues
+    return has_cue
 
 
 def _suffix_by_text(token, kinds, text):
@@ -963,6 +979,32 @@ def _suffix_by_text(token, kinds, text):
 _JIMOK_WORDS = frozenset("전 답 과 대 장 학 차 주 창 도 철 제 천 구 유 양 수 공 체 원 종 사 묘 잡 임 임야 대지 도로 하천 구거 제방 유지 잡종지 공원 학교용지 주차장 창고용지 주유소용지 공장용지 염전 광천지 철도용지 수도용지 체육용지 종교용지 사적지 묘지 양어장 목장용지".split())
 
 
+WIDE_CITY_SUFFIXES = ("도청", "광역시청", "특별자치시청", "특별자치도청")
+
+
+def is_wide_city(name):
+    """도청·광역시청·특별자치시청 본청 게시판인가(한 시도 안의 여러 시군구 공고가 섞여 있어 시군구 기본값을 붙이지 않는 출처)."""
+    return bool(name) and (str(name).endswith(WIDE_CITY_SUFFIXES) or "통합특별시" in str(name))
+
+
+def is_metro_head_office(name):
+    """광역시청·특별자치시청 본청 게시판인가. Regions 의 시군구 기본값(본청 소재지)을 빼는 대상은 여기까지만 한다 -
+    도청은 리 이름이 군마다 겹쳐, 시군구를 안 붙이면 PNU 변환이 엉뚱한 곳을 '성공'으로 고를 위험이 커서(실패보다 나쁨) 그대로 둔다."""
+    return bool(name) and str(name).endswith(("광역시청", "특별자치시청"))
+
+
+def wide_variant(regions):
+    """Regions 의 복사본(wide_area=True). 원본은 그대로 둔다. Regions 가 아니거나 호출 가능한(제목별) 값이면 그대로 돌려준다."""
+    import copy
+    if regions is None or callable(regions) or not hasattr(regions, "wide_area"):
+        return regions
+    if regions.wide_area:
+        return regions
+    w = copy.copy(regions)
+    w.wide_area = True
+    return w
+
+
 def bare_myeon_ri(a, b, notice_text, has_header_cue):
     """'면 | 리' 열 값 두 개(a, b)에 접미사를 붙인다 -> (면 이름, 리 이름) 또는 None.
     근거 1) 표 머리글에 '소재지'와 따로 떨어진 '면', '리' 글자가 있다(열 이름이 면·리). 근거 2) 같은 공고 본문에
@@ -971,6 +1013,8 @@ def bare_myeon_ri(a, b, notice_text, has_header_cue):
     # (2026-10-18: 머리글 근거가 있으면 아무 두 단어에나 면·리를 붙여 '유구읍면 명곡리리', '임면 구리' 같은 가짜 소재지를 만들었다)
     if any(len(t) < 2 or t in _JIMOK_WORDS for t in (a, b)) or a[-1] in "읍면" or b[-1] == "리":
         return None
+    if len(a) >= 3 and a[-1] in "시군구":
+        return None  # '시·군 | 읍·면·리' 표의 '연수구 옥련동': 앞 값은 시군구 이름이지 접미사 없는 면 이름이 아니다(2글자 '유구' 같은 면 이름은 그대로)
     if has_header_cue:
         return a + "면", b + "리"
     eup = _suffix_by_text(a, ("면", "읍"), notice_text)
@@ -984,7 +1028,7 @@ _DECL_SIDO = r"[가-힣]{2,6}(?:특별시|광역시|특별자치시|특별자치
 _DECL_RI = r"[가-힣0-9]{1,6}[동리가]"
 _DECL_RE = re.compile(
     rf"(?:(?P<sido>{_DECL_SIDO})\s*)?(?P<sigun>[가-힣]{{1,5}}[시군구])\s*(?:(?P<eup>[가-힣]{{1,4}}[읍면])\s*)?"
-    rf"(?P<ris>{_DECL_RI}(?:\s*(?:,|·|、|및|와|과)\s*{_DECL_RI})*)\s*(?:일원|일대)")
+    rf"(?P<ris>{_DECL_RI}(?:\s*(?:,|·|、|및|와|과)\s*{_DECL_RI})*)(?:\s*(?:산\s*)?\d+(?:-\d+)?\s*번지)?\s*(?:일원|일대)")
 
 # 공고문의 '사업시행지역 : 가평군 가평읍 상색리 ~ 춘천시 남산면 서천리', '경기도 가평군 상면 율길리181번지 일원(솔안천)' 처럼 라벨 뒤에 적힌 위치.
 # 토지조서(xlsx)는 공고문(hwp/pdf)과 다른 첨부라 같은 글의 공고문 본문을 문맥으로 함께 읽는다(한국부동산원 실측 2026-11-10).
@@ -1079,7 +1123,10 @@ class Regions:
     (이 클래스 자체는 고치지 않는다)."""
 
     def __init__(self, sido_name, sigun_name, eupmyeon_ri=None, legal_dongs="", admin_dongs="",
-                 not_region_words="", extra_files=(), nationwide=False):
+                 not_region_words="", extra_files=(), nationwide=False, wide_area=False):
+        # wide_area=True: 광역시청·도청 본청처럼 한 시도 안의 여러 시군구 공고가 섞인 출처. 시도는 확실하지만 sigun_name(본청 소재지)은 사업지의 기본값이 아니다.
+        # 문서에 시군이 없는 행에는 시도만 붙이고 시군구는 붙이지 않는다(인천광역시청 시보의 '인천광역시 남동구 주안동' 은 실제 미추홀구 주안동이다).
+        self.wide_area = wide_area
         # nationwide=True: 사업지가 전국인 기관(한국부동산원·LH·국방부 등). sido_name/sigun_name 은 본사 소재지일 뿐이라 사업지의 기본값이 아니다.
         # 문서에서 시군을 찾지 못한 행에 이 기본값을 붙이면 없는 주소가 되므로, 그런 행은 소재지 근거가 없다고 보고 추출을 포기한다.
         self.nationwide = nationwide
@@ -1233,7 +1280,9 @@ class Regions:
                     status = "CHECK"
                     notes.append("미등록 리, 읍면 없음")
                     self.candidate(dr, "리")
-        if self.nationwide and not sigun:
+        if self.wide_area and not sigun and not self.nationwide:
+            region = " ".join(x for x in (self.sido_name, eup, dr) if x)
+        elif self.nationwide and not sigun:
             # 사업지가 전국인 기관: 본사 소재지(예: 대구 동구)는 사업지가 아니다. 문서에 적힌 읍면·리·지번만 남겨 PNU 변환(카카오 전국 검색)에 맡긴다
             region = " ".join(x for x in (eup, dr) if x)
         else:
@@ -1266,8 +1315,7 @@ class Regions:
     def rows_from_text_A(self, text, last_region=None):
         """규칙 A: 표를 글로 펴 놓은 형태. 반환: (행 목록, 마지막 지역명)"""
         rows, pos, last = [], 0, last_region
-        cue = BARE_HEADER_RE.search(text)
-        cue_at = cue.start() if cue else None
+        has_cue = bare_cue_checker(text)  # 행이 속한 표의 머리글에 면/리 열 이름이 있는지(글 전체에서 한 번만 찾지 않는다)
         first = ROW_RE.search(text)
         head = text[:first.start()] if first else ""
         i_in, i_or = head.rfind("편입"), max(head.rfind("지적"), head.rfind("공부"), head.rfind("전체"))
@@ -1281,12 +1329,17 @@ class Regions:
                 pub_section = _public_heading_before(text, m.start())  # 표가 끊겼거나 새 소제목(국유지·공유지·사유지)이 나오면 다시 판단
             chunk = text[pos:m.start()].rstrip()
             bare = None
+            gu_pair = None
             if not chunk.endswith("〃") and (bp := BARE_PAIR_RE.search(chunk)):
-                bare = bare_myeon_ri(bp.group(1), bp.group(2), text, cue_at is not None and cue_at < m.start())
+                bare = bare_myeon_ri(bp.group(1), bp.group(2), text, has_cue(m.start()))
+                if bare is None and len(bp.group(1)) >= 3 and bp.group(1)[-1] in "시군구" and bp.group(2)[-1] in "동리가":
+                    gu_pair = (bp.group(1), bp.group(2))  # '시·군 | 읍·면·리' 표의 '연수구 동춘동': 시군구와 동이 이미 완전한 이름이다
             if chunk.endswith("〃"):
                 region = last
             elif bare:  # '면 | 리' 열 표: 문서가 보여 주는 접미사를 붙여 '대강면 당동리'로 읽는다
                 region = last = f"{bare[0]} {bare[1]}"
+            elif gu_pair:  # 시도를 붙여 넘겨야 resolve 가 '연수구 동춘동'을 띄어쓰기 없이 '연수구동춘동'으로 잘못 읽지 않는다
+                region = last = f"{self.sido_name} {gu_pair[0]} {gu_pair[1]}"
             else:
                 tr = self._tail_region(chunk)
                 if tr and self._accept_region(tr, last is not None):
