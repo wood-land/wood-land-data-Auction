@@ -85,6 +85,13 @@ def _now():
     return datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def last_record_formula(title):
+    """목차 시트 E열(최근추출날짜): 그 탭 A열(기록시각)의 마지막 값. 탭은 실행 때마다 아래에 이어 붙으므로 마지막 행이 가장 최근이다.
+    머리글만 있으면 빈 칸. 목차를 갱신할 때마다 수식이 다시 쓰이고, 값은 구글시트가 계산한다."""
+    q = title.replace("'", "''")
+    return f"=IF(COUNTA('{q}'!A:A)>1,INDEX('{q}'!A:A,COUNTA('{q}'!A:A)),\"\")"
+
+
 class RunLog:
     def __init__(self):
         self._lock = threading.Lock()
@@ -252,11 +259,12 @@ class RunLog:
                 region, kind,
                 f'=HYPERLINK("#gid={pr["sheetId"]}","{safe}")',
                 f"=COUNTA('{q}'!A:A)-1",
+                last_record_formula(title),
             ]))
         rows.sort(key=lambda t: (t[0], t[1]))
-        values = [["지역", "시트", "바로가기(클릭)", "행수"]] + [r[2] for r in rows]
+        values = [["지역", "시트", "바로가기(클릭)", "행수", "최근추출날짜"]] + [r[2] for r in rows]
         tab = first["title"].replace("'", "''")
-        sess.post(f"{base}/values/'{tab}'!A:D:clear", timeout=30, json={}).raise_for_status()
+        sess.post(f"{base}/values/'{tab}'!A:E:clear", timeout=30, json={}).raise_for_status()
         sess.put(f"{base}/values/'{tab}'!A1", params={"valueInputOption": "USER_ENTERED"}, timeout=30,
                  json={"values": values}).raise_for_status()
         sess.post(f"{base}:batchUpdate", timeout=30, json={"requests": [
