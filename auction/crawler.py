@@ -102,7 +102,7 @@ COLLECT_MODE_ENV = os.environ.get("COLLECT_MODE", "both")
 # (2026-09-07, 로컬 v32 반영) 감정가격(APSL) 기준 대신 최저가격(MINB) 기준으로 필터링한다.
 # 워크플로우/Secrets 쪽 입력 이름은 하위 호환을 위해 그대로 APSL_AMT_END를 유지하되,
 # 내부적으로는 "최저가격 상한"을 의미하는 값으로 사용한다.
-MINB_AMT_END_ENV = os.environ.get("APSL_AMT_END", "300000000")
+MINB_AMT_END_ENV = os.environ.get("APSL_AMT_END", "500000000")
 # TRIGGER_TYPE: 워크플로우가 "schedule"(예약)로 시작됐는지, 그 외(수동 실행 등)로
 # 시작됐는지를 나타낸다. 워크플로우 파일에서 github.event_name 값을 그대로 넘겨준다.
 # 기본값을 "manual"로 둔 이유: 이 값을 못 받아오는 상황(예: 로컬에서 직접 실행,
@@ -166,7 +166,7 @@ AMOUNT_OPTIONS = [
     (40000000000, "400억"), (50000000000, "500억"), (60000000000, "600억"), (70000000000, "700억"),
     (80000000000, "800억"), (90000000000, "900억"), (100000000000, "1000억"),
 ]
-DEFAULT_APSL_AMT_END = 300000000
+DEFAULT_APSL_AMT_END = 500000000
 
 
 # (2026-10-04) 같은 물건이 2번씩 저장되는 문제 방지: 이번 실행에서 이미 시트에 기록한(또는 구글 시트에서
@@ -1584,7 +1584,7 @@ def prompt_apsl_amt_end():
     elif raw.isdigit() and int(raw) in valid_values:
         result = raw
     else:
-        print(f"[설정] APSL_AMT_END 값({raw!r})이 올바르지 않아 기본값(3억)으로 진행합니다.")
+        print(f"[설정] APSL_AMT_END 값({raw!r})이 올바르지 않아 기본값(5억)으로 진행합니다.")
         result = str(DEFAULT_APSL_AMT_END)
     print(f"[설정] 최저가격 상한: {int(result):,}원 (환경변수 APSL_AMT_END)")
     return result
@@ -1747,7 +1747,7 @@ def apply_filters(driver, apsl_amt_end_value):
     time.sleep(1.2)
     set_field_value(driver, "#endDt", end_date_str, "매각기일 종료일")
     time.sleep(1.2)
-    set_field_value(driver, "#apslAmtEnd", apsl_amt_end_value, "감정가격 상한")
+    set_field_value(driver, "#minbAmtEnd", apsl_amt_end_value, "최저가격 상한")
     time.sleep(2)
 
 
@@ -1816,7 +1816,7 @@ def apply_filters_pa(driver, apsl_amt_end_value, prptdvsn_value):
     time.sleep(1.0)
     set_field_value(driver, "#prptDvsn", prptdvsn_value, f"[{TYPE_B_LABEL}] 자산구분")
     time.sleep(1.0)
-    set_field_value(driver, "#apslAmtEnd", str(apsl_amt_end_value), f"[{TYPE_B_LABEL}] 감정가격 상한")
+    set_field_value(driver, "#minbAmtEnd", str(apsl_amt_end_value), f"[{TYPE_B_LABEL}] 최저가격 상한")
     time.sleep(2.0)
 
 
@@ -2787,7 +2787,7 @@ def main():
     gsheet_sync_state = {"synced_rows": 1 + len(existing_rows)}
 
     print(f"\n검색 조건: 물건종류코드={CTGR_VALUE}, 매각기일={start_date_str}~{end_date_str}, "
-          f"감정가상한={int(apsl_amt_end_value):,}원")
+          f"최저가상한={int(apsl_amt_end_value):,}원")
     if FETCH_DETAIL_DOCS and pdfplumber is None:
         print("경고: pdfplumber 모듈이 설치되어 있지 않아 PDF 텍스트 추출이 동작하지 않습니다.")
     print()
