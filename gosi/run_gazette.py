@@ -41,6 +41,7 @@ from requests.adapters import HTTPAdapter  # noqa: E402
 from openpyxl import load_workbook  # noqa: E402
 
 from core import gazette_extractor as GX  # noqa: E402
+from core import jose_extractor as JX  # noqa: E402
 from core import http_fetch  # noqa: E402
 from core import synap_preview as SP  # noqa: E402
 from core.sqlite_store import post_key  # noqa: E402
@@ -258,8 +259,10 @@ def process_board(args):
         res["status"], res["detail"] = "최근 게시물 없음", f"최근 {days}일 이내 게시물 없음"
         return res
     regions = city_obj.regions if city_obj is not None else None
-    # 도청·광역시 본청 공보는 여러 시군 공고가 섞여 있어 시군구를 기본값으로 채우지 않는다
-    is_wide = b["city"].endswith(("도청", "광역시청", "특별자치시청")) or "통합특별시" in b["city"]
+    # 도청·광역시 본청 공보는 여러 시군 공고가 섞여 있어 시군구를 기본값으로 채우지 않는다(Regions 규칙 경로는 광역시청만 wide_area 로 맞춘다)
+    is_wide = JX.is_wide_city(b["city"])
+    if JX.is_metro_head_office(b["city"]):  # 광역시청·특별자치시청만(도청은 제외: jose_extractor.is_metro_head_office 설명 참고)
+        regions = JX.wide_variant(regions)
     default_sido = getattr(regions, "sido_name", "") if regions is not None and not callable(regions) else ""
     default_sigun = "" if is_wide else (getattr(regions, "sigun_name", "") if regions is not None and not callable(regions) else "")
     stat = {"hwp_only": 0, "image_pdf": 0, "dl_fail": 0, "unknown": 0, "ocr": 0, "preview": 0}

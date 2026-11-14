@@ -309,10 +309,9 @@ def _bare_rows(text, notice_text):
     """'면 | 리' 열 표의 행 -> [(eup, ri, 정규식 매치)]. 면·리 접미사는 표 머리글(면/리 열 이름) 또는 같은 공고 본문에
     적힌 말('대강면', '당동리')로 확인될 때만 붙이고, 확인이 안 되면 그 행은 읽지 않는다."""
     out = []
-    cue = jose_extractor.BARE_HEADER_RE.search(text)
+    has_cue = jose_extractor.bare_cue_checker(text)  # 행이 속한 표의 머리글 단서만 인정
     for m in BARE_ROW_RE.finditer(text):
-        pair = jose_extractor.bare_myeon_ri(m.group("a"), m.group("b"), notice_text,
-                                            bool(cue) and cue.start() < m.start())
+        pair = jose_extractor.bare_myeon_ri(m.group("a"), m.group("b"), notice_text, has_cue(m.start()))
         if pair:
             out.append((pair[0], pair[1], m))
     return out
