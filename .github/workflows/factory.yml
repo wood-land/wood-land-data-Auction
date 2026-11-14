@@ -1,12 +1,13 @@
 name: factory-weekly
 
-# 공장/근린상가 진행물건 수집(+ NPL 겹침 열). 지금은 수동 실행(workflow_dispatch)만 켜져 있다.
-# 매주 자동 실행을 켜려면 아래 schedule 블록의 주석(#)을 풀면 된다.
-# 권장: NPL 목록을 PC에서 수집해 둔 뒤(주 1회) 그 이후 시각으로 잡는다.
+# 공장/근린상가 진행물건 수집(+ NPL 겹침 열). 매주 일요일 18:00(KST)에 자동 실행하고, 수동 실행(workflow_dispatch)도 가능하다.
+# - 자동(schedule) 실행은 입력값이 없으므로 아래 기본값(최저가 상한 10억 / 건물면적 상한 200평)으로 돈다.
+# - 수동 실행(Actions 탭 > factory-weekly > Run workflow)에서만 값을 바꿔 넣을 수 있다.
+# - auction-weekly(금·토 새벽)와 시각이 겹치지 않고, 같은 concurrency 그룹이라 겹치더라도 순서대로 실행된다.
 on:
-  # schedule:
-  #   # 토요일 낮 12:00(KST) = 토요일 03:00 UTC  (auction-weekly 의 토요일 새벽 실행이 끝난 뒤)
-  #   - cron: "0 3 * * 6"
+  schedule:
+    # 일요일 18:00 KST = 일요일 09:00 UTC
+    - cron: "0 9 * * 0"
   workflow_dispatch:
     inputs:
       minb_amt_end:
@@ -45,6 +46,15 @@ jobs:
       - name: 브라우저 설치
         uses: browser-actions/setup-chrome@v1
 
+      - name: 필수 설정 확인
+        env:
+          NPL_SHEET_ID: ${{ secrets.NPL_SHEET_ID }}
+        run: |
+          if [ -z "$NPL_SHEET_ID" ]; then
+            echo "::error::Secrets 에 NPL_SHEET_ID 가 없습니다 (결과를 저장할 시트 ID)."
+            exit 1
+          fi
+
       - name: 실행
         env:
           SITE_DOMAIN: ${{ secrets.SITE_DOMAIN }}
@@ -52,11 +62,8 @@ jobs:
           SITE_LOGIN_PW: ${{ secrets.SITE_LOGIN_PW }}
           TYPE_A_LABEL: ${{ secrets.TYPE_A_LABEL }}
           TYPE_B_LABEL: ${{ secrets.TYPE_B_LABEL }}
-          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-          # 공장/근린상가 탭을 따로 둘 스프레드시트가 있으면 Secrets 에 FACTORY_SHEET_ID 를 추가한다(없으면 GOOGLE_SHEET_ID 사용)
-          FACTORY_SHEET_ID: ${{ secrets.FACTORY_SHEET_ID }}
-          # NPL 목록이 저장된 스프레드시트 ID. 비어 있으면 NPL_겹침 열은 비워 둔다.
-          # 서비스 계정(GOOGLE_SA_KEY_JSON_ADMIN)이 그 시트에 '편집자' 이상으로 공유되어 있어야 읽을 수 있다.
+          # NPL 목록이 있는 스프레드시트 ID. 공장/근린상가 결과 탭도 이 시트에 저장한다.
+          # 서비스 계정(GOOGLE_SA_KEY_JSON_ADMIN)이 그 시트에 '편집자'로 공유되어 있어야 한다.
           NPL_SHEET_ID: ${{ secrets.NPL_SHEET_ID }}
           SHARE_EMAIL: ${{ secrets.SHARE_EMAIL }}
           GOOGLE_SA_KEY_JSON: ${{ secrets.GOOGLE_SA_KEY_JSON_ADMIN }}

@@ -2,7 +2,7 @@
 [GitHub Actions 버전] 로컬 PC 용 공장근린상가 v2 코드를 Actions 에서 돌리도록 옮긴 파일.
 사이트 주소/로그인/시트 ID 는 환경변수(Secrets)로 받고, 프롬프트는 환경변수로, 크롬은 headless 로 바꿨다.
 수집/저장 로직은 로컬 버전과 동일하다. 환경변수: SITE_DOMAIN, SITE_LOGIN_ID, SITE_LOGIN_PW, TYPE_A_LABEL, TYPE_B_LABEL,
-GOOGLE_SA_KEY_JSON, FACTORY_SHEET_ID(없으면 GOOGLE_SHEET_ID), NPL_SHEET_ID, MINB_AMT_END, AREA_PYEONG_END.
+GOOGLE_SA_KEY_JSON, NPL_SHEET_ID(결과 저장 시트 겸 NPL 읽기 시트), MINB_AMT_END, AREA_PYEONG_END.
 """
 
 """
@@ -348,7 +348,7 @@ TYPE_HEADER_LABEL = f"{TYPE_A_LABEL}/{TYPE_B_LABEL}"
 LOGIN_ID = os.environ.get("SITE_LOGIN_ID", "")
 LOGIN_PW = os.environ.get("SITE_LOGIN_PW", "")
 
-GOOGLE_SHEET_ID = os.environ.get("FACTORY_SHEET_ID", "") or os.environ.get("GOOGLE_SHEET_ID", "")
+GOOGLE_SHEET_ID = os.environ.get("NPL_SHEET_ID", "")   # 결과 탭을 저장하는 시트 = NPL 목록이 있는 시트
 GOOGLE_SHEET_SHARE_EMAIL = os.environ.get("SHARE_EMAIL", "")
 
 
