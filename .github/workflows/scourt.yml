@@ -64,7 +64,7 @@ jobs:
       - name: 실행
         env:
           GOOGLE_CREDENTIALS_EDITER: ${{ secrets.GOOGLE_CREDENTIALS_EDITER }}
-          GOOGLE_SHEET_ID: 1CCk7fK2afaSgNqTADQZlC--mxskNhhDhdWkagQ-Y5kU
+          GOOGLE_SHEET_ID: 1W1AlfKELR7bwwDM347wHBCDeDmfdb_Y1zbuUWk04bCg
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           VWORLD_API_KEY: ${{ secrets.VWORLD_API_KEY }}
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}

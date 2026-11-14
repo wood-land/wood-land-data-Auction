@@ -321,7 +321,7 @@ def _find_google_credentials_path():
 
 
 GOOGLE_CREDENTIALS_PATH = _find_google_credentials_path()
-GOOGLE_SHEET_ID = (os.environ.get("GOOGLE_SHEET_ID") or "1CCk7fK2afaSgNqTADQZlC--mxskNhhDhdWkagQ-Y5kU").strip()
+GOOGLE_SHEET_ID = (os.environ.get("GOOGLE_SHEET_ID") or "1W1AlfKELR7bwwDM347wHBCDeDmfdb_Y1zbuUWk04bCg").strip()
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_EDITER", "").strip()
 GOOGLE_SHEET_LIST_TAB     = "공고목록"
 # ✅ v3.6: '부동산목록'/'입찰일정' 탭 제거. 그 세부 정보는 이제 '공고목록'의 JSON 상세열에
