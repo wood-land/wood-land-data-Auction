@@ -21,3 +21,20 @@ def test_serial_column_is_not_jibun():
     got = [r["jibun_incl"] for r in rows]
     assert "290" not in got and "291" not in got
     assert got == ["202-1", "203-3", "204"]
+
+
+def _grid_with_first_head(first, orig_head="분할전 지번"):
+    head1 = [first, "소재지", orig_head, "지 목", "지적면적", "편입면적"]
+    rows = [["51", "심천면 명천리", "61-3", "답", "21", "21"],
+            ["52", "심천면 명천리", "589-1", "도", "202", "3"],
+            ["53", "심천면 명천리", "60-1", "답", "145", "145"]]
+    return [head1] + rows
+
+
+def test_yongji_beonho_and_tojibeonho_are_not_jibun():
+    # '용지 번호'(충북 영동 편입용지조서) / '토지번호'(전남 고흥) 도 줄 번호다. 공백을 빼면 '지번' 이 들어 있어 지번 열로 오인됐다
+    for first in ("용지 번호", "토지번호"):
+        rows, _ = j.rows_from_document_grids([(1, 0, _grid_with_first_head(first))], "x.pdf", "")
+        got = [r["jibun_incl"] for r in rows]
+        assert "51" not in got and "52" not in got, (first, got)
+        assert got == ["61-3", "589-1", "60-1"], (first, got)

@@ -579,9 +579,9 @@ def classify_heads(grid, hdr_rows):
             continue
         if other:
             continue
-        # '지번 순번'·'지번>연번' 은 지번이 아니라 줄 번호다(의성군 안평천 세목조서 실측 2026-11-15: 연번을 지번으로 읽어
+        # '지번 순번'·'지번>연번'·'용지 번호'·'토지번호'(공백을 빼면 '지번' 이 들어 있다) 는 지번이 아니라 줄 번호다(의성군 안평천 세목조서 실측 2026-11-15: 연번을 지번으로 읽어
         # 경매 물건 '하령리 391' 이 고시공고와 겹친 것으로 잘못 나왔다). 같은 칸에 당초·편입·변경·분할 같은 말이 있으면 지번 열이다.
-        if re.search(r"순번|연번|일련번호", h) and not re.search(r"당초|편입|변경|분할|원지번|종전", h):
+        if re.search(r"순번|연번|일련번호|(용지|토지|필지|물건)번호", h) and not re.search(r"당초|편입|변경|분할|원지번|종전", h):
             continue
         if R["jibun_orig"].search(h):
             cols.setdefault("jibun_orig", c)
