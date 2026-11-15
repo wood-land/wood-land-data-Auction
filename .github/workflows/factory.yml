@@ -7,7 +7,7 @@ name: factory-weekly
 on:
   schedule:
     # 일요일 18:00 KST = 일요일 09:00 UTC
-    - cron: "0 9 * * 0"
+    - cron: "17 9 * * 0"
   workflow_dispatch:
     inputs:
       minb_amt_end:
