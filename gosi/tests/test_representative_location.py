@@ -93,6 +93,48 @@ class RepresentativeLocationTest(unittest.TestCase):
         self.assertNotIn("15", {r["jibun_incl"] for r in rows})
 
 
+GRID_JIBUN_ONLY = [
+    ["번호", "지번", "지목", "면적(㎡)"],
+    ["1", "산12-3", "임야", "1,200"],
+    ["2", "45", "답", "300"],
+    ["3", "46-1", "전", "250"],
+    ["4", "47", "대", "80"],
+]
+
+
+class BareJibunListTest(unittest.TestCase):
+    """대표 위치가 '○○동 일원' 이고 하단에는 지번만 나열된 문서: '00시 ○○동 00번지' 로 쓴다(사용자 지시 2026-11-17)."""
+
+    def _rows(self, text):
+        rows = rows_of(GRID_JIBUN_ONLY)
+        return J.fill_bare_rows_from_representative(rows, text)
+
+    def test_full_location_with_sigungu(self):
+        rows = self._rows("위치 : 경기도 가평군 조종면 신하리 일원")
+        self.assertEqual({r["sojaeji"] for r in rows}, {"경기도 가평군 조종면 신하리"})
+        self.assertEqual([r["jibun_incl"] for r in rows], ["산12-3", "45", "46-1", "47"])
+
+    def test_resolved_to_complete_address_with_jibun(self):
+        rows = self._rows("사업위치 : 부산광역시 남구 용당동 일원 사업기간 2026")
+        R = J.wide_variant(J.Regions(sido_name="부산광역시", sigun_name="연제구"))
+        rows = J.finalize_rows(rows, R)
+        self.assertEqual(rows[1]["sojaeji"], "부산광역시 남구 용당동 45")
+
+    def test_dong_only_gets_sigungu_from_issuer(self):
+        rows = self._rows("사업의 위치 : 용당동 일원")
+        R = J.wide_variant(J.Regions(sido_name="부산광역시", sigun_name="연제구"))
+        rows = J.apply_representative_location(rows, "부산광역시 남구 고시 제2026-139호", R)
+        self.assertEqual(rows[0]["sojaeji"], "부산광역시 남구 용당동")
+
+    def test_two_declared_dongs_are_ambiguous_and_left_alone(self):
+        rows = self._rows("위치 : 가평군 상면 율길리, 신하리 일원")
+        self.assertEqual({r["sojaeji"] for r in rows}, {""})
+
+    def test_rows_that_already_have_a_location_are_untouched(self):
+        rows = [{"sojaeji": "남구 감만동", "jibun_incl": "1"}]
+        self.assertEqual(J.fill_bare_rows_from_representative(rows, "위치 : 부산광역시 남구 용당동 일원")[0]["sojaeji"], "남구 감만동")
+
+
 class SidoAgreesTest(unittest.TestCase):
     def test_other_sido_is_rejected(self):
         self.assertFalse(sido_agrees("부산광역시 남구 용당동 540", "경남"))

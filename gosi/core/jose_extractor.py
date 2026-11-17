@@ -1436,6 +1436,43 @@ _SIGUNGU_WORD = re.compile(r"[가-힣]{1,5}[시군구]")
 _SIDO_WORD = re.compile(r"(?:특별시|광역시|특별자치시|특별자치도|[가-힣]도)$")
 
 
+def representative_dong(text):
+    """본문이 선언한 사업의 대표 위치 중 동·리 단위(예: '위치 : 경기도 가평군 조종면 신하리 일원', '○○동 일원')가 하나로 정해지면
+    (시도, 시군구, 읍면, 동리), 없거나 서로 다른 동·리가 둘 이상 선언되면 None. 사용자 지시 2026-11-17: 대표 위치가 '○○동 일원' 이고
+    문서 하단에 지번만 나열되면 소재지는 '00시 ○○동' + 지번(= '00시 ○○동 00번지')으로 쓴다."""
+    found = []
+    for m in _LABEL_RE.finditer(text or ""):
+        seg = re.sub(r"\s+", " ", m.group(1))
+        if not re.search(r"(?:일원|일대)", seg):
+            continue
+        for pm in _PIECE_RE.finditer(re.sub(r"\s*(?:일원|일대).*$", "", seg)):  # '율길리, 신하리 일원' 처럼 둘 이상이면 아래에서 포기한다
+            found.append((pm.group("sido") or "", pm.group("sigun") or "", pm.group("eup") or "", pm.group("ri")))
+    for m in _DECL_RE.finditer(text or ""):
+        ris = re.split(r"\s*(?:,|·|、|및|와|과)\s*", m.group("ris").strip())
+        if len(ris) == 1:
+            found.append((m.group("sido") or "", m.group("sigun"), m.group("eup") or "", ris[0]))
+    uniq = {f[3] for f in found}
+    if len(uniq) != 1:
+        return None
+    # 시군구까지 적힌 선언을 우선한다
+    return next((f for f in found if f[1]), found[0])
+
+
+def fill_bare_rows_from_representative(rows, text):
+    """소재지 칸이 비어 지번만 있는 행에 대표 위치(representative_dong)의 시도·시군구·읍면·동리를 채운다."""
+    rep_loc = None
+    for r in rows:
+        soj = clean(r.get("sojaeji", ""))
+        if re.search(r"[가-힣]", re.sub(r"(?:^|\s)산(?=\s*\d)", " ", soj)):
+            continue
+        if rep_loc is None:
+            rep_loc = representative_dong(text) or ()
+        if not rep_loc:
+            return rows
+        r["sojaeji"] = " ".join(x for x in rep_loc if x)
+    return rows
+
+
 _ISSUER_RE = re.compile(r"(?:(?P<sido>[가-힣]{2,6}(?:특별시|광역시|특별자치시|특별자치도|도))\s*)?(?P<sg>[가-힣]{1,5}[시군구])\s*(?:고시|공고)\s*제\s*\d{4}")
 
 
@@ -1710,6 +1747,7 @@ def extract_from_attachment(data, ext, filename, title, regions, site_name="", c
             r["project_name"] = project
             r["source_file"] = filename
         rep["text_rows"] = len(rows)
+    rows = fill_bare_rows_from_representative(rows, (full_text(ext, data) or "") + " " + (context_text or ""))
     if not getattr(regions, "nationwide", False):
         rows = apply_representative_location(rows, (full_text(ext, data) or "") + " " + (context_text or ""), regions)
     rows = finalize_rows(rows, regions, sojaeji_with_jibun=sojaeji_with_jibun)

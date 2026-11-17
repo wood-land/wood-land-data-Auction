@@ -16,6 +16,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from core.continuity import region_outliers
 from core.pnu import RESOLVER_VERSION, looks_like_non_parcel
 from core.run_log import LOG
 
@@ -268,13 +269,24 @@ def save_parcels(con, resolver, city, source_type, rows):
     다음 실행 때 자동으로 다시 시도한다. 반환: (새로 저장한 필지 수, PNU 변환 실패 수)"""
     t = now()
     new, failed = 0, 0
+    # 1단계: 모든 행을 PNU 로 바꾼다. 2단계: 같은 고시문 안에서 인근이 아닌 엉뚱한 지역 필지(continuity)를 거른다. 3단계: 저장.
+    resolved = []
     for a in rows:
         pnu, reason = resolver.resolve_full(
             a.get("sojaeji"), a.get("jibun"), f'{a.get("post_title") or ""} {a.get("project_name") or ""}',
             city or "", a.get("post_title") or "", a.get("project_name") or "", a.get("jimok") or "")
+        resolved.append((a, pnu, reason, resolver.last_full))
+    by_notice = {}
+    for i, (a, pnu, _r, _f) in enumerate(resolved):
+        by_notice.setdefault((a.get("post_url") or "", _title(a)), []).append(i)
+    for members in by_notice.values():
+        for k in region_outliers([resolved[i][1] for i in members]):
+            i = members[k]
+            resolved[i] = (resolved[i][0], None, "outlier_region", "")  # 앞뒤 필지와 동떨어진 지역: 변환 오류로 보고 저장하지 않는다(parcels_unresolved 에 사유를 남김)
+    for a, pnu, reason, last_full in resolved:
         if pnu:
-            if resolver.last_full:  # 카카오가 바로잡은 정식 주소(시도 시군구 읍면 리 지번)로 저장한다
-                a = {**a, "sojaeji": resolver.last_full}
+            if last_full:  # 카카오가 바로잡은 정식 주소(시도 시군구 읍면 리 지번)로 저장한다
+                a = {**a, "sojaeji": last_full}
             new += _insert_parcel(con, pnu, a, city, source_type, 0 if reason == "ok_ri" else 1)
             continue
         failed += 1
@@ -310,8 +322,9 @@ def retry_unresolved(con, resolver, recheck_days=30):
     rows = con.execute(
         """SELECT rowid, sojaeji, jibun, jimok, area_incl, city, source_type, title, url, post_date, project_name, ocr, owner_kind
            FROM parcels_unresolved
-           WHERE reason IN ('transient','no_key') OR resolver_version < ?
-              OR (ai_tried = 0 AND ?) OR last_tried_at < datetime('now', ?)""",
+           WHERE COALESCE(reason, '') != 'outlier_region'  -- 같은 고시문 앞뒤 필지와 동떨어진 지역으로 걸러낸 행은 단독으로 다시 변환하면 연속성 검사 없이 되살아난다
+             AND (reason IN ('transient','no_key') OR resolver_version < ?
+                  OR (ai_tried = 0 AND ?) OR last_tried_at < datetime('now', ?))""",
         (RESOLVER_VERSION, 1 if resolver.ai.enabled else 0, f"-{recheck_days} days"),
     ).fetchall()
     t, fixed = now(), 0
