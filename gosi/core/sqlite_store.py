@@ -16,7 +16,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from core.continuity import region_outliers
+from core.continuity import distant_outliers
 from core.pnu import RESOLVER_VERSION, looks_like_non_parcel
 from core.run_log import LOG
 
@@ -279,8 +279,11 @@ def save_parcels(con, resolver, city, source_type, rows):
     by_notice = {}
     for i, (a, pnu, _r, _f) in enumerate(resolved):
         by_notice.setdefault((a.get("post_url") or "", _title(a)), []).append(i)
+    geocode = getattr(resolver, "geocode", None)
     for members in by_notice.values():
-        for k in region_outliers([resolved[i][1] for i in members]):
+        pnus = [resolved[i][1] for i in members]
+        addrs = [(resolved[i][3] or f'{resolved[i][0].get("sojaeji") or ""} {resolved[i][0].get("jibun") or ""}').strip() for i in members]
+        for k in distant_outliers(pnus, addrs, geocode):
             i = members[k]
             resolved[i] = (resolved[i][0], None, "outlier_region", "")  # 앞뒤 필지와 동떨어진 지역: 변환 오류로 보고 저장하지 않는다(parcels_unresolved 에 사유를 남김)
     for a, pnu, reason, last_full in resolved:

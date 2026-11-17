@@ -11,7 +11,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from core.continuity import region_outliers  # noqa: E402
+from core.continuity import distant_outliers, region_outliers  # noqa: E402
 
 
 def pnu(code5, n):
@@ -46,6 +46,44 @@ class RegionOutliersTest(unittest.TestCase):
         self.assertEqual(region_outliers(seq), {3})
 
 
+class DistanceConfirmTest(unittest.TestCase):
+    """후보(code 규칙)를 실제 거리로 다시 본다: 경계를 넘어 이어지는 국도·하천은 정상, 멀리 떨어진 필지만 오류."""
+
+    @staticmethod
+    def _geo(table):
+        return lambda addr: table.get(addr)
+
+    def _case(self, stray_xy):
+        seq = [pnu("41110", i) for i in range(1, 9)]
+        seq[4] = pnu("42110", 1)  # 다른 시군으로 변환된 필지(후보)
+        addrs = [f"a{i}" for i in range(8)]
+        xy = {f"a{i}": (37.5 + i * 0.001, 127.0) for i in range(8)}  # 정상 필지: 100m 간격
+        xy["a4"] = stray_xy
+        return seq, addrs, xy
+
+    def test_adjacent_across_boundary_is_kept(self):
+        seq, addrs, xy = self._case((37.504, 127.01))  # 이웃과 약 1km(경춘국도·장산지구 같은 경계 이음)
+        self.assertEqual(distant_outliers(seq, addrs, self._geo(xy)), set())
+
+    def test_far_parcel_is_confirmed(self):
+        seq, addrs, xy = self._case((37.9, 128.5))  # 130km 이상
+        self.assertEqual(distant_outliers(seq, addrs, self._geo(xy)), {4})
+
+    def test_far_but_within_the_notices_own_gaps_is_kept(self):
+        # 철도처럼 역과 역 사이가 30km 인 고시문: 17km 떨어진 필지는 그 구간 안이라 정상
+        seq = [pnu("11200", i) for i in range(1, 4)] + [pnu("41450", 1)] + [pnu("11200", i) for i in range(5, 11)]
+        addrs = [f"b{i}" for i in range(10)]
+        xy = {f"b{i}": (37.5 + (0.3 * (i // 2)), 127.0 + i * 0.0005) for i in range(10)}  # 두 필지씩 묶여 0.3도(약 33km) 간격
+        xy["b3"] = (37.5 + 0.15, 127.0)  # 17km 떨어진 후보
+        self.assertEqual(distant_outliers(seq, addrs, self._geo(xy)), set())
+
+    def test_unknown_coordinates_keep_the_parcel(self):
+        seq, addrs, xy = self._case((37.9, 128.5))
+        xy["a4"] = None
+        self.assertEqual(distant_outliers(seq, addrs, self._geo(xy)), set())
+        self.assertEqual(distant_outliers(seq, addrs, None), set())
+
+
 class SaveParcelsTest(unittest.TestCase):
     class FakeResolver:
         class ai:  # noqa: N801
@@ -54,6 +92,9 @@ class SaveParcelsTest(unittest.TestCase):
 
         def __init__(self, table):
             self.table = table
+
+        def geocode(self, addr):
+            return (35.0, 129.0) if "540" not in addr else (35.4, 129.3)  # 양산 용당동 540 은 이웃에서 50km 가까이
 
         def resolve_full(self, sojaeji, jibun, context="", city="", title="", project="", jimok=""):
             self.last_full = ""

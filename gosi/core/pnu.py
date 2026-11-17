@@ -181,6 +181,25 @@ class PnuResolver:
         if "full" not in [r[1] for r in con.execute("PRAGMA cache.table_info(pnu_cache)")]:
             con.execute("ALTER TABLE cache.pnu_cache ADD COLUMN full TEXT")  # 예전 캐시 파일 호환
 
+    def geocode(self, query):
+        """주소 -> (위도, 경도) 또는 None. 같은 주소는 cache.geo_cache 에 저장해 다시 묻지 않는다(고시문 안 필지 연속성 거리 확인용)."""
+        query = (query or "").strip()
+        if not query or not self.key:
+            return None
+        self.con.execute("CREATE TABLE IF NOT EXISTS cache.geo_cache (query TEXT PRIMARY KEY, lat REAL, lon REAL)")
+        row = self.con.execute("SELECT lat, lon FROM cache.geo_cache WHERE query=?", (query,)).fetchone()
+        if row:
+            return (row[0], row[1]) if row[0] is not None else None
+        data, state = self._call_raw(query)
+        if state != "ok":
+            return None  # 일시 오류는 저장하지 않는다
+        docs = data.get("documents") or []
+        xy = (float(docs[0]["y"]), float(docs[0]["x"])) if docs else None
+        self.con.execute("INSERT OR REPLACE INTO cache.geo_cache VALUES (?,?,?)", (query, xy[0] if xy else None, xy[1] if xy else None))
+        self.con.commit()
+        self.stats["api"] += 1
+        return xy
+
     def _call(self, query):
         data, state = self._call_raw(query)
         if state != "ok":

@@ -4,6 +4,11 @@
 같은 고시문 안에 인근이 아닌 다른 지역 필지가 있으면 그건 오류다.
 PNU 앞 4자리(시군; 창원시 의창구·성산구처럼 한 시의 구는 같은 것으로 본다)·2자리(시도)만 쓴다(좌표 없이 판단). 서울+경기 철도처럼 진짜 걸친 사업은 걸친 쪽이 한 덩어리로 이어지므로 걸리지 않는다.
 
+2단계(거리 확인, 사용자 지시 2026-11-17): 위 규칙은 후보만 고른다. 같은 이름 동·리가 다른 시군에 있어도 도로·하천·철도처럼 사업 구간이 이어져
+경계를 넘는 것은 정상이다(경춘국도 4공구·장산지구 배수개선: 이웃 필지와 0.2~1.5km). 그래서 후보를 앞뒤 이웃 필지와의 실제 거리(카카오 좌표)로 다시 본다:
+ 후보가 가장 가까운 앞뒤 정상 이웃과 10km 이상이고, 그 고시문 정상 필지들 사이의 가장 큰 이음 거리(철도·도로의 역·구간 사이)의 1.5배보다도 멀면 오류.
+ 좌표를 못 구하면 오류로 보지 않는다(저장 유지).
+
 규칙(해결된 PNU 가 6개 이상인 고시문에만 적용):
  R1 외딴 필지: 문서 순서로 앞뒤 3개씩(최대 6개) 이웃 중 같은 시군이 하나도 없고, 이웃의 2/3 이상이 한 시군으로 모여 있으면 외딴 필지.
  R2 소수 시도: 해결된 PNU 가 8개 이상이고 한 시도가 70% 이상인데, 다른 시도 필지가 합쳐서 max(2, 10%) 이하이면 그 필지들은 외딴 필지.
@@ -38,3 +43,46 @@ def region_outliers(pnus):
         if cnt >= 2 / 3 * len(near) and common != code4[k]:
             out.add(idx[k])
     return out
+
+
+MIN_KM = 10.0      # 이웃과 이만큼은 떨어져야 오류 후보
+MARGIN = 1.5       # 정상 필지 사이 가장 큰 이음 거리의 몇 배보다 멀어야 하는가
+STEP_SAMPLE = 80   # 이음 거리를 재는 정상 필지 수(앞에서부터)
+
+
+def _km(a, b):
+    import math
+    return math.hypot((a[1] - b[1]) * 88.8, (a[0] - b[0]) * 111.0)
+
+
+def distant_outliers(pnus, addrs, geocode, candidates=None):
+    """region_outliers 후보 중 실제 거리까지 멀리 떨어진 것만 돌려준다. addrs: pnus 와 같은 순서의 주소(좌표 조회용),
+    geocode(addr) -> (위도, 경도) 또는 None. geocode 가 없으면 확인할 수 없으니 빈 집합."""
+    cand = set(region_outliers(pnus) if candidates is None else candidates)
+    if not cand or geocode is None:
+        return set()
+    idx = [i for i, p in enumerate(pnus) if p and len(p) >= 5]
+    pos = {i: k for k, i in enumerate(idx)}
+    normal = [i for i in idx if i not in cand]
+    memo = {}
+
+    def xy(i):
+        if i not in memo:
+            memo[i] = geocode(addrs[i])
+        return memo[i]
+
+    steps = []
+    for a, b in zip(normal[:STEP_SAMPLE], normal[1:STEP_SAMPLE]):
+        ga, gb = xy(a), xy(b)
+        if ga and gb:
+            steps.append(_km(ga, gb))
+    limit = max(MIN_KM, MARGIN * (max(steps) if steps else 0.0))
+    confirmed = set()
+    for i in cand:
+        k = pos[i]
+        near = [idx[j] for j in range(max(0, k - WINDOW), min(len(idx), k + WINDOW + 1)) if j != k and idx[j] not in cand]
+        g = xy(i)
+        ds = [_km(g, xy(j)) for j in near if g and xy(j)]
+        if ds and min(ds) > limit:
+            confirmed.add(i)
+    return confirmed
