@@ -78,6 +78,23 @@ class AdministrativeDispositionExclusionTest(unittest.TestCase):
         self.assertFalse(matches_blacklist("OO도로 개설공사 사업인정에 관한 의견청취 공고", DEFAULT_BLACKLIST))
 
 
+class CouncilNoticeExclusionTest(unittest.TestCase):
+    """지방의회 공고(정례회·임시회·의견청취안·조례안)는 제외한다(사용자 지시 2026-11-17). '협의회' 같은 말은 막지 않는다."""
+
+    def test_council_notices_are_blocked(self):
+        from core.board_crawler import matches_blacklist
+        for t in ("제328회 고창군의회 제2차 정례회 부의 안건(의견청취안) 공고(수정)",
+                  "고령군의회 공고 제2026-24호 제316회 고령군의회 임시회 집 회 공 고",
+                  "부산광역시 동구의회 공고 제2026-38호 위원회 조례 일부개정조례안",
+                  "인천광역시 제물포구의회 공고 제2026-14호 조례 일부개정조례안"):
+            self.assertTrue(matches_blacklist(t, DEFAULT_BLACKLIST), t)
+
+    def test_councils_with_land_words_are_not_confused(self):
+        from core.board_crawler import matches_blacklist
+        for t in ("OO지구 도시개발사업 협의회 구성 공고", "OO도로 개설공사 보상계획 공고"):
+            self.assertFalse(matches_blacklist(t, DEFAULT_BLACKLIST), t)
+
+
 class ExcludedBoardsTest(unittest.TestCase):
     def test_excluded_boards_are_not_loaded(self):
         cities = {b["city"] for b in G.load_boards(EXCEL)}
