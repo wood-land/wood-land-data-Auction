@@ -67,6 +67,17 @@ class ReclamationExclusionTest(unittest.TestCase):
         self.assertFalse(matches_blacklist("OO도로 개설공사 보상계획 공고", DEFAULT_BLACKLIST))
 
 
+class AdministrativeDispositionExclusionTest(unittest.TestCase):
+    """토지 보상과 무관한 영업·사업장 행정처분 통지는 '의견 청취' 키워드에 걸려도 제외한다(사용자 지시 2026-11-17)."""
+
+    def test_minbak_disposition_is_blocked_but_land_hearing_is_not(self):
+        from core.board_crawler import matches_blacklist
+        t = "농어촌민박사업자 직권말소 및 사업장 폐쇄 처분에 대한 의견청취 통지"
+        self.assertTrue(any(k.replace(" ", "") in t.replace(" ", "") for k in DEFAULT_KEYWORDS))  # 키워드에는 걸린다
+        self.assertTrue(matches_blacklist(t, DEFAULT_BLACKLIST))
+        self.assertFalse(matches_blacklist("OO도로 개설공사 사업인정에 관한 의견청취 공고", DEFAULT_BLACKLIST))
+
+
 class ExcludedBoardsTest(unittest.TestCase):
     def test_excluded_boards_are_not_loaded(self):
         cities = {b["city"] for b in G.load_boards(EXCEL)}
