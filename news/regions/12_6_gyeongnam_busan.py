@@ -189,7 +189,8 @@ SITES: list[Site] = [
                     note="창녕군 대표 지역신문. 익산신문 패키지 솔루션 search_list 실측 100% 통과"),
 
     # (11) 고성군
-    _iksan_verified("고성신문", "고성군", "http://www.gosnews.kr",
+    # 고성군은 강원·경남에 둘 다 있다. 시·도를 붙이지 않으면 '동해면 내곡리'가 강원 고성군으로 완성돼 변환이 실패한다(2026-11-17)
+    _iksan_verified("고성신문", "경상남도 고성군", "http://www.gosnews.kr",
                     note="고성군 대표 지역신문(바지연). 익산신문 패키지 솔루션 search_list 실측 100% 통과"),
 
     # (12) 의령군
