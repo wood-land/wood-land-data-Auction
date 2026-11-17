@@ -45,6 +45,18 @@ class RiverZoneExclusionTest(unittest.TestCase):
             self.assertFalse(self._blocked(t), t)
 
 
+class CadastralResurveyExclusionTest(unittest.TestCase):
+    """지적재조사지구 지정·변경·완료지구 고시는 제외한다(사용자 지시 2026-11-17)."""
+
+    def test_resurvey_district_notices_are_blocked(self):
+        from core.board_crawler import matches_blacklist
+        for t in ("강원특별자치도 고시 제2026-468호 강원특별자치도 지적재조사지구 지정(변경) 고시",
+                  "◉경상남도 고시 제2026-481호 지적재조사지구 변경 고시",
+                  "대전광역시 고시 제2026-262호 중구 산성1지구 지적재조사지구 지정 고시",
+                  "오산시 고시 제2026-249호 지적재조사사업 완료지구 지형도면 고시"):
+            self.assertTrue(matches_blacklist(t, DEFAULT_BLACKLIST), t)
+
+
 class ExcludedBoardsTest(unittest.TestCase):
     def test_excluded_boards_are_not_loaded(self):
         cities = {b["city"] for b in G.load_boards(EXCEL)}
