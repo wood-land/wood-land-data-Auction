@@ -1521,6 +1521,13 @@ def apply_representative_location(rows, text="", regions=None):
     return rows
 
 
+def drop_public_owner_rows(rows):
+    """소유자가 국·공·시·도·군유지(국가·지자체·공공기관)인 행은 추출하지 않는다. 사용자 지시 2026-11-17(제천시 청풍면 사오리 토지조서: 소유자 '공'·'국',
+    주소 '충청북도'·'제천시'·'산림청'). 2026-10-26 의 '수집하되 국공유로 표시' 지시를 바꾼 것이다. -> (남은 행, 버린 행 수)"""
+    keep = [r for r in rows if r.get("owner_type") != "국공유"]
+    return keep, len(rows) - len(keep)
+
+
 def finalize_rows(rows, regions, sojaeji_with_jibun=True):
     """추출한 행의 소재지를 '완전한 주소'로 바꾸고 주소 검증 결과(addr_status/addr_note)를 채운다."""
     for r in rows:
@@ -1750,6 +1757,8 @@ def extract_from_attachment(data, ext, filename, title, regions, site_name="", c
     rows = fill_bare_rows_from_representative(rows, (full_text(ext, data) or "") + " " + (context_text or ""))
     if not getattr(regions, "nationwide", False):
         rows = apply_representative_location(rows, (full_text(ext, data) or "") + " " + (context_text or ""), regions)
+    rows, dropped_public = drop_public_owner_rows(rows)
+    rep["skipped_public"] += dropped_public
     rows = finalize_rows(rows, regions, sojaeji_with_jibun=sojaeji_with_jibun)
     rows = dedupe_parcels(rows, sojaeji_with_jibun=sojaeji_with_jibun)
     rep["bad_rows"] = sum(1 for r in rows if r.get("addr_status") == "BAD")
