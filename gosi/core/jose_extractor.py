@@ -586,7 +586,9 @@ def classify_heads(grid, hdr_rows):
         if R["jibun_orig"].search(h):
             cols.setdefault("jibun_orig", c)
             continue
-        if R["jibun"].search(h):
+        if R["jibun"].search(h) and not (re.search(r"면적|㎡", h) and not re.search(r"지번|번지|분할후", h)):
+            # 위 규칙의 '변경후' 는 '지번>변경후' 용이다. '면적(㎡)>변경후' 같은 면적 열을 지번 열로 읽으면 면적 '15,540' 이 지번 15·540 이 된다
+            # (부산 부경대학교 용당캠퍼스 지형도면 고시 실측 2026-11-17: 필지가 전국의 용당동으로 번졌다)
             if "jibun" in cols:  # '지번>당초' / '지번>변경' 처럼 지번 열이 둘이면 뒤쪽은 보조(앞쪽이 빈 신규·분할 필지용)
                 cols.setdefault("jibun_alt", c)
             else:
@@ -714,7 +716,7 @@ def rows_from_grid(grid, ctx):
             cols, heads = classify_heads(grid, hdr)
             jcol = cols.get("jibun", cols.get("jibun_orig"))
     if jcol is None:
-        if cols["loc"] and ("jimok" in cols or "name" in cols):
+        if cols["loc"] and ("jimok" in cols or "name" in cols or _loc_cells_embedded(grid, hdr, cols["loc"][0])):
             return rows_embedded(grid, hdr, cols, ctx)
         ctx["debug"].append({"tag": ctx["tag"], "reason": "no-jibun-col", "heads": heads})
         return []
@@ -851,12 +853,24 @@ def rows_by_cols(grid, hdr, cols, heads, ctx):
     return out
 
 
+_EMBEDDED_LOC_RE = re.compile(r"^(.*?[가-힣])\s*((?:산\s*)?\d+(?:-\d+)?)\s*(?:번지)?\s*(?:일\s*원|일\s*대)?\s*$")
+
+
+def _loc_cells_embedded(grid, hdr, lc):
+    """위치 칸의 자료 값 대부분이 '<동·리> <지번>[번지][ 일원]' 형태인가(지번 열 없는 시설 조서)."""
+    vals = [clean(grid[r][lc]) for r in range(hdr, min(len(grid), hdr + 60)) if clean(grid[r][lc])]
+    vals = [v for v in vals if not re.fullmatch(r"(합계|소계|총계|계)", squash(v))]
+    if not vals:
+        return False
+    return sum(bool(_EMBEDDED_LOC_RE.match(v) and re.search(r"[동리가]\s*(?:산\s*)?\d", v)) for v in vals) >= 0.8 * len(vals)
+
+
 def rows_embedded(grid, hdr, cols, ctx):
     """지번 열이 따로 없고 소재지 칸에 '문막읍 궁촌리 457-2' 처럼 붙어 있는 표"""
     out = []
     lc = cols["loc"][0]
     for r in range(hdr, len(grid)):
-        m = re.match(r"^(.*[가-힣])\s*((?:산\s*)?\d+(?:-\d+)?)\s*(?:번지)?\s*$", clean(grid[r][lc]))
+        m = _EMBEDDED_LOC_RE.match(clean(grid[r][lc]))
         if not m:
             continue
         g = lambda k: clean(grid[r][cols[k]]) if k in cols else ""
@@ -1418,6 +1432,58 @@ class Regions:
         return rows
 
 
+_SIGUNGU_WORD = re.compile(r"[가-힣]{1,5}[시군구]")
+_SIDO_WORD = re.compile(r"(?:특별시|광역시|특별자치시|특별자치도|[가-힣]도)$")
+
+
+_ISSUER_RE = re.compile(r"(?:(?P<sido>[가-힣]{2,6}(?:특별시|광역시|특별자치시|특별자치도|도))\s*)?(?P<sg>[가-힣]{1,5}[시군구])\s*(?:고시|공고)\s*제\s*\d{4}")
+
+
+def apply_representative_location(rows, text="", regions=None):
+    """사업의 대표 위치(문서에서 가장 먼저 시군구까지 적힌 소재지: 시설 결정조서의 '위치' 칸 등)를 기준으로,
+    시군구 없이 '동·리'만 적힌 행에 그 시군구(와 시도)를 붙인다. 사용자 지시 2026-11-17: 토지조서의 나머지 주소는 대표 위치의 인근이다
+    (부산 남구 용당동 251 일원인 고시의 '감만동 182-81' 은 같은 남구 감만동이지 다른 시군의 같은 이름 동이 아니다).
+    행이 자기 시군구를 적었으면 그 시군구는 그대로 두고, 시도가 없으면 게시판 시도(regions.sido_name)만 앞에 붙인다
+    ('남구 용당동' 을 시도 없이 두면 Regions 가 '남구용당동' 으로 붙여 쓴다). 기준이 없으면 시군구는 건드리지 않는다."""
+    # 게시판 시도는 광역시청·도청 본청(wide_area)에서만 사업지의 시도로 믿는다. 한국부동산원처럼 본사 소재지(대구 동구)가 시도·시군구로 잡힌 출처에서는 쓰지 않는다
+    sido0 = (getattr(regions, "sido_name", "") or "") if getattr(regions, "wide_area", False) and not getattr(regions, "nationwide", False) else ""
+    sigun0 = getattr(regions, "sigun_name", "") or ""
+
+    def sg_of(words):
+        return next((w for w in words if _SIGUNGU_WORD.fullmatch(w) and not _SIDO_WORD.search(w)), None)
+
+    anchor = None
+    for r in rows:
+        words = clean(r.get("sojaeji", "")).split()
+        sg = sg_of(words)
+        if sg:
+            anchor = (next((w for w in words if _SIDO_WORD.search(w) and w != sg), "") or sido0, sg)
+            break
+    if not anchor:
+        # 표에 시군구가 한 번도 없으면 본문의 '부산광역시 남구 고시 제2026-139호' 같은 시행 기관을 대표 위치로 쓴다
+        m = _ISSUER_RE.search(text or "")
+        if m and not _SIDO_WORD.search(m.group("sg")):
+            anchor = (m.group("sido") or sido0, m.group("sg"))
+    for r in rows:
+        words = clean(r.get("sojaeji", "")).split()
+        if not words:
+            continue
+        has_sido = any(_SIDO_WORD.search(w) for w in words)
+        sg = sg_of(words)
+        if sg:
+            if not has_sido and sido0 and sg != sigun0:
+                r["sojaeji"] = " ".join([sido0] + words)
+            continue
+        if not anchor or not any(re.fullmatch(r"[가-힣0-9]{1,6}[동리가]|[가-힣]{2,5}[읍면]", w) for w in words):
+            continue
+        if has_sido and anchor[0] and anchor[0] not in words:
+            continue  # 다른 시도를 적은 행
+        pos = next((i for i, w in enumerate(words) if not _SIDO_WORD.search(w)), 0)
+        head = [] if has_sido or not anchor[0] else [anchor[0]]
+        r["sojaeji"] = " ".join(words[:pos] + head + [anchor[1]] + words[pos:])
+    return rows
+
+
 def finalize_rows(rows, regions, sojaeji_with_jibun=True):
     """추출한 행의 소재지를 '완전한 주소'로 바꾸고 주소 검증 결과(addr_status/addr_note)를 채운다."""
     for r in rows:
@@ -1644,6 +1710,8 @@ def extract_from_attachment(data, ext, filename, title, regions, site_name="", c
             r["project_name"] = project
             r["source_file"] = filename
         rep["text_rows"] = len(rows)
+    if not getattr(regions, "nationwide", False):
+        rows = apply_representative_location(rows, (full_text(ext, data) or "") + " " + (context_text or ""), regions)
     rows = finalize_rows(rows, regions, sojaeji_with_jibun=sojaeji_with_jibun)
     rows = dedupe_parcels(rows, sojaeji_with_jibun=sojaeji_with_jibun)
     rep["bad_rows"] = sum(1 for r in rows if r.get("addr_status") == "BAD")

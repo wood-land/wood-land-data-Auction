@@ -20,7 +20,7 @@ import requests
 
 from core.local_dir import find_dirs
 
-RESOLVER_VERSION = 7  # 7(2026-10-26): 면 빠진 리·읍면 오기재·시군 첫 글자 빠진 주소 보완(실패 캐시 라벨도 v4 로 올림) / 변환 규칙을 고칠 때 올린다 -> 이전 실패분(parcels_unresolved)을 한 번 전부 다시 시도
+RESOLVER_VERSION = 8  # 8(2026-11-17): 소재지의 시도와 카카오 결과의 시도가 다르면 받지 않음(sido_agrees) / 7(2026-10-26): 면 빠진 리·읍면 오기재·시군 첫 글자 빠진 주소 보완(실패 캐시 라벨도 v4 로 올림) / 변환 규칙을 고칠 때 올린다 -> 이전 실패분(parcels_unresolved)을 한 번 전부 다시 시도
 KAKAO_URL = "https://dapi.kakao.com/v2/local/search/address.json"
 
 SIDO_FULL = {
@@ -117,6 +117,32 @@ def region_agrees(sojaeji, region2):
     if not names or not region2:
         return True
     return all(re.sub(r"(특례시|[시군구])$", "", w) in region2 for w in names)
+
+
+_SIDO_KEYS = (("서울", "서울"), ("부산", "부산"), ("대구", "대구"), ("인천", "인천"), ("광주", "광주"), ("대전", "대전"), ("울산", "울산"), ("세종", "세종"),
+              ("경기", "경기"), ("강원", "강원"), ("충청북", "충북"), ("충북", "충북"), ("충청남", "충남"), ("충남", "충남"), ("전라북", "전북"), ("전북", "전북"),
+              ("전라남", "전남"), ("전남", "전남"), ("경상북", "경북"), ("경북", "경북"), ("경상남", "경남"), ("경남", "경남"), ("제주", "제주"))
+_SIDO_WORD_RE = re.compile(r"^[가-힣]{2,8}(?:특별시|광역시|특별자치시|특별자치도|통합특별시|도)$")
+
+
+def sido_keys(name):
+    """시도 이름('부산광역시', '전라남도', '전남', '전남광주통합특별시')을 비교용 짧은 이름 집합({'부산'}, {'전남'}, {'전남','광주'})으로. 모르면 빈 집합."""
+    name = (name or "").strip()
+    return {k for pre, k in _SIDO_KEYS if name.startswith(pre) or (len(name) > 4 and pre in name and name.endswith(("통합특별시",)))}
+
+
+def sido_agrees(sojaeji, region1):
+    """소재지에 시도가 적혀 있으면 카카오 결과의 시도(region_1depth_name)가 같아야 한다. region_agrees 는 시군구만 봐서
+    '부산광역시 용당동 540' 처럼 시군구 없는 소재지에 경남 양산시 용당동 540 이 붙는 것을 못 막았다
+    (부산 부경대학교 용당캠퍼스 지형도면 고시 실측 2026-11-17: 필지가 전국의 용당동으로 번졌다). 소재지에 시도가 없거나 이름을 모르면 통과."""
+    want = set()
+    for w in (sojaeji or "").split():
+        if _SIDO_WORD_RE.fullmatch(w):
+            want |= sido_keys(w)
+    got = sido_keys(region1)
+    if not want or not got:
+        return True
+    return bool(want & got)
 
 
 def repair_concat_sigun(sojaeji, context):
@@ -293,7 +319,7 @@ class PnuResolver:
         pnu, status, full = None, "no_match_v4", ""
         for d in data.get("documents", []):
             m = self._match(d, want)
-            if m and region_agrees(sojaeji, m[2]):
+            if m and region_agrees(sojaeji, m[2]) and sido_agrees(sojaeji, m[1]):
                 pnu, status, full = m[0], "ok", m[3]
                 break
         if not pnu:
@@ -322,7 +348,7 @@ class PnuResolver:
                 cands = {}
                 for d in data2.get("documents", []):
                     m = self._match(d, want)
-                    if m:
+                    if m and sido_agrees(sojaeji, m[1]):  # 소재지에 적힌 시도 밖의 같은 이름 동·리는 후보가 아니다
                         cands[m[0]] = m
                 if len(cands) > 1:  # 같은 읍면·리 이름이 여러 곳 -> 제목/문맥에 나온 지역으로 가린다
                     ctx = f"{context} {city or ''}"  # 제목에 지역이 없어도 수집한 지자체(city)로 가린다('의정부동' 이 여러 곳일 때)
@@ -348,7 +374,7 @@ class PnuResolver:
             if state_s == "ok":
                 for d in data_s.get("documents", []):
                     m = self._match(d, want)
-                    if m and region_agrees(stripped, m[2]):
+                    if m and region_agrees(stripped, m[2]) and sido_agrees(stripped, m[1]):
                         pnu, status, full = m[0], "ok_dongnum", m[3]
                         break
         if not pnu:
