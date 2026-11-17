@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 import requests
 
+from common.owner_lookup import lookup_owner_code, public_label  # noqa: E402
 from common.admin_names import (  # noqa: F401  (다른 모듈이 예전처럼 pnu_resolver 에서 가져다 쓸 수 있게 다시 내보낸다)
     AMBIGUOUS_SIGUNGU, EUP_MYEON_MAP, GENERAL_GU_PARENT, METRO_GU_MAP, NON_PLACE_DONGRI,
     PROVINCE_STANDARDIZATION, SHORT_SIGUNGU_MAP, SHORT_TO_SIGUNGU, SIGUNGU_TO_PROVINCE,
@@ -450,8 +451,11 @@ class PNUResolver:
     """
 
     def __init__(self, db_path: str = "output/news_articles_pnu.db",
-                 kakao_fn: Optional[Callable] = None, vworld_fn: Optional[Callable] = None):
+                 kakao_fn: Optional[Callable] = None, vworld_fn: Optional[Callable] = None,
+                 owner_fn: Optional[Callable] = None):
         self.db_path = db_path
+        # 필지 소유 구분 조회(테스트에서 가짜 함수를 넣을 수 있다). owner_fn(pnu, x, y) -> '02' 같은 코드 또는 None(판단 불가)
+        self.owner_fn = owner_fn or (lambda pnu, x, y: lookup_owner_code(pnu, x, y, self.session))
         self.session = requests.Session()
         self.kakao_fn = kakao_fn or get_pnu_from_kakao       # 테스트에서 가짜 조회 함수를 넣을 수 있다
         self.vworld_fn = vworld_fn or get_pnu_from_vworld
@@ -517,6 +521,14 @@ class PNUResolver:
                     y REAL,
                     status TEXT,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # 필지 소유 구분 캐시(VWorld 토지소유정보): 같은 필지를 다시 조회하지 않는다
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS owner_cache (
+                    pnu TEXT PRIMARY KEY,
+                    code TEXT,
+                    checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             cur.execute("PRAGMA table_info(address_pnu_cache)")
@@ -654,6 +666,33 @@ class PNUResolver:
                 conn.commit()
         return stats
 
+    def owner_code(self, pnu: str, x, y) -> Optional[str]:
+        """필지 소유 구분 코드(캐시 우선). 판단 불가면 None(캐시하지 않는다)."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("SELECT code FROM owner_cache WHERE pnu = ?", (pnu,)).fetchone()
+        if row:
+            return row[0]
+        code = self.owner_fn(pnu, x, y)
+        if code:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("INSERT OR REPLACE INTO owner_cache (pnu, code) VALUES (?, ?)", (pnu, code))
+                conn.commit()
+        return code
+
+    def mark_public_owner(self, address_results: List[PNUResult]) -> int:
+        """SUCCESS 인 필지 중 국유지·시도유지·군유지는 status 를 'PUBLIC_OWNER' 로 바꾼다(추출 제외: 지도·겹침에는 SUCCESS 만 쓰인다).
+        행은 남겨 두어 어떤 주소가 왜 빠졌는지 볼 수 있고, 같은 기사를 다시 처리하지 않는다. 반환: 바꾼 개수."""
+        n = 0
+        for r in address_results:
+            if r.status != "SUCCESS" or not r.pnu:
+                continue
+            label = public_label(self.owner_code(r.pnu, r.x, r.y))
+            if label:
+                r.status = "PUBLIC_OWNER"
+                r.error_message = f"공공 소유({label}) 필지라 제외"
+                n += 1
+        return n
+
     def save_article_and_addresses(self, article: dict, address_results: List[PNUResult]) -> Tuple[int, int]:
         """기사 메타데이터와 발급된 PNU 내역을 SQLite에 트랜잭션으로 안전하게 저장.
         - 동일 지번 PNU에 동일한 내용(링크, 제목, 본문해시)의 신문기사는 중복 저장을 방지하여 1건만 유지.
@@ -673,6 +712,7 @@ class PNUResolver:
 
         saved_count = 0
         skipped_count = 0
+        self.mark_public_owner(address_results)
 
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.cursor()
