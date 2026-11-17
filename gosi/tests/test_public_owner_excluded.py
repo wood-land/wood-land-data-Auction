@@ -43,5 +43,32 @@ class PublicOwnerExcludedTest(unittest.TestCase):
         self.assertEqual((rows, dropped), ([], 4))
 
 
+class SaveParcelsSkipsPublicTest(unittest.TestCase):
+    def test_public_rows_are_not_saved(self):
+        import tempfile
+        from core import sqlite_store as S
+
+        class R:
+            class ai:  # noqa: N801
+                enabled = False
+            last_full = ""
+
+            def resolve_full(self, sojaeji, jibun, *a, **k):
+                self.last_full = ""
+                return "2629010800102510000", "ok"
+
+        old = os.environ.get("GOSI_CACHE_DIR")
+        self.addCleanup(lambda: os.environ.__setitem__("GOSI_CACHE_DIR", old) if old is not None else os.environ.pop("GOSI_CACHE_DIR", None))
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["GOSI_CACHE_DIR"] = os.path.join(d, "cache")
+            con = S.connect(os.path.join(d, "t.sqlite"))
+            rows = [{"sojaeji": "부산광역시 남구 용당동", "jibun": "251", "post_url": "u", "post_title": "t", "owner_type": "국공유"},
+                    {"sojaeji": "부산광역시 남구 용당동", "jibun": "252", "post_url": "u", "post_title": "t", "owner_type": "사유"}]
+            new, failed = S.save_parcels(con, R(), "부산광역시청", "공보", rows)
+            self.assertEqual((new, failed), (1, 0))
+            self.assertEqual(con.execute("SELECT owner_kind FROM parcels").fetchall(), [("사유",)])
+            con.close()
+
+
 if __name__ == "__main__":
     unittest.main()

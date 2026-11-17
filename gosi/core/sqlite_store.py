@@ -269,6 +269,8 @@ def save_parcels(con, resolver, city, source_type, rows):
     다음 실행 때 자동으로 다시 시도한다. 반환: (새로 저장한 필지 수, PNU 변환 실패 수)"""
     t = now()
     new, failed = 0, 0
+    # 소유자가 국·공·시·도·군유지인 필지는 저장하지 않는다(사용자 지시 2026-11-17). 공보(gazette_extractor)처럼 extract_from_attachment 를 거치지 않는 경로도 여기서 막는다.
+    rows = [a for a in rows if a.get("owner_type") != "국공유"]
     # 1단계: 모든 행을 PNU 로 바꾼다. 2단계: 같은 고시문 안에서 인근이 아닌 엉뚱한 지역 필지(continuity)를 거른다. 3단계: 저장.
     resolved = []
     for a in rows:
@@ -318,6 +320,8 @@ def retry_unresolved(con, resolver, recheck_days=30):
     for rowid, soj in con.execute("SELECT rowid, sojaeji FROM parcels_unresolved WHERE resolver_version < ?", (RESOLVER_VERSION,)).fetchall():
         if not re.search(r"[가-힣]", re.sub(r"(?:^|\s)산(?=\s*\d)", " ", soj or "")):  # 지번('산13-4' 포함)뿐인 행
             con.execute("DELETE FROM parcels_unresolved WHERE rowid=?", (rowid,))
+    # 소유자가 국·공·시·도·군유지로 표시돼 저장된 옛 변환 실패 행은 더 이상 필지로 옮기지 않는다(사용자 지시 2026-11-17)
+    con.execute("DELETE FROM parcels_unresolved WHERE owner_kind = '공공'")
     # 필지가 아닌 행(○ 대지면적 : 6 같은 개요 줄)은 판별 규칙이 나중에 늘어도 바로 치운다(API 호출 없음, 재시도 주기와 무관)
     for rowid, soj in con.execute("SELECT rowid, sojaeji FROM parcels_unresolved").fetchall():
         if looks_like_non_parcel(soj):

@@ -1,4 +1,4 @@
-"""소유구분(owner_kind) 저장 테스트: 국가·지자체 소유 필지도 수집하되 사유/공공/미상으로 표시한다(2026-10-26). 네트워크 없이 돈다.
+"""소유구분(owner_kind) 저장 테스트. 2026-10-26 에는 국가·지자체 소유 필지도 수집하며 공공으로 표시했으나, 2026-11-17 사용자 지시로 국·공·시·도·군유지는 저장하지 않는다. 네트워크 없이 돈다.
 실행: gosi 폴더에서 `python -m unittest discover -s tests -v`"""
 import os
 import sqlite3
@@ -57,27 +57,28 @@ class OwnerKind(unittest.TestCase):
         self.assertEqual([S.owner_kind(x) for x in ("국공유", "사유", "법인", "", "확인필요", None)],
                          ["공공", "사유", "사유", "미상", "미상", "미상"])
 
-    def test_public_parcels_are_saved_with_kind(self):
+    def test_public_parcels_are_not_saved(self):
         con = self.connect()
         new, failed = S.save_parcels(con, FakeResolver(), "포천시", "고시공고",
                                      [row("1-1", "국공유"), row("2", "사유"), row("3", "법인"), row("4", ""), row("5", "확인필요")])
-        self.assertEqual((new, failed), (5, 0))
-        self.assertEqual(self.kinds(con), {"1-1": "공공", "2": "사유", "3": "사유", "4": "미상", "5": "미상"})
-        view = con.execute("SELECT owner_kind FROM v_parcels WHERE jibun='1-1'").fetchone()
-        self.assertEqual(view, ("공공",))  # 조회용 뷰에도 나온다
+        self.assertEqual((new, failed), (4, 0))
+        self.assertEqual(self.kinds(con), {"2": "사유", "3": "사유", "4": "미상", "5": "미상"})
+        self.assertIsNone(con.execute("SELECT owner_kind FROM v_parcels WHERE jibun='1-1'").fetchone())
 
     def test_unknown_kind_is_filled_when_learned_later(self):
         con = self.connect()
         S.save_parcels(con, FakeResolver(), "포천시", "고시공고", [row("7", "")])
-        S.save_parcels(con, FakeResolver(), "포천시", "고시공고", [row("7", "국공유")])
-        self.assertEqual(self.kinds(con), {"7": "공공"})
+        S.save_parcels(con, FakeResolver(), "포천시", "고시공고", [row("7", "사유")])
+        self.assertEqual(self.kinds(con), {"7": "사유"})
         S.save_parcels(con, FakeResolver(), "포천시", "고시공고", [row("7", "")])  # 모르는 값으로는 덮어쓰지 않는다
-        self.assertEqual(self.kinds(con), {"7": "공공"})
+        self.assertEqual(self.kinds(con), {"7": "사유"})
+        S.save_parcels(con, FakeResolver(), "포천시", "고시공고", [row("7", "국공유")])  # 공공으로 알게 되어도 저장하지 않으니 그대로
+        self.assertEqual(self.kinds(con), {"7": "사유"})
 
-    def test_unresolved_keeps_kind_through_retry(self):
+    def test_unresolved_private_keeps_kind_through_retry(self):
         con = self.connect()
-        S.save_parcels(con, FakeResolver(), "포천시", "고시공고", [row("9", "국공유", soj="경기도 없는곳 가산면")])
-        self.assertEqual(con.execute("SELECT owner_kind FROM parcels_unresolved").fetchone(), ("공공",))
+        S.save_parcels(con, FakeResolver(), "포천시", "고시공고", [row("9", "사유", soj="경기도 없는곳 가산면")])
+        self.assertEqual(con.execute("SELECT owner_kind FROM parcels_unresolved").fetchone(), ("사유",))
 
         class Fixed(FakeResolver):
             def resolve_full(self, sojaeji, jibun, *args):
@@ -85,8 +86,17 @@ class OwnerKind(unittest.TestCase):
 
         con.execute("UPDATE parcels_unresolved SET resolver_version = 0")  # 변환 규칙 버전이 올라간 것처럼 -> 재시도 대상
         S.retry_unresolved(con, Fixed())
-        self.assertEqual(self.kinds(con), {"9": "공공"})
+        self.assertEqual(self.kinds(con), {"9": "사유"})
         self.assertEqual(con.execute("SELECT count(*) FROM parcels_unresolved").fetchone(), (0,))
+
+    def test_legacy_public_unresolved_rows_are_dropped_on_retry(self):
+        con = self.connect()
+        con.execute("INSERT INTO parcels_unresolved (sojaeji, jibun, city, source_type, title, url, reason, resolver_version, owner_kind) "
+                    "VALUES ('경기도 없는곳 가산면', '9', '포천시', '고시공고', '공고', 'http://x/1', 'no_match', 0, '공공')")
+        con.commit()
+        S.retry_unresolved(con, FakeResolver())
+        self.assertEqual(con.execute("SELECT count(*) FROM parcels_unresolved").fetchone(), (0,))
+        self.assertEqual(self.kinds(con), {})
 
     def test_old_database_gets_the_column(self):
         con = sqlite3.connect(self.db)
@@ -103,8 +113,8 @@ class OwnerKind(unittest.TestCase):
         con.close()
         con = self.connect()
         self.assertEqual(con.execute("SELECT owner_kind FROM parcels").fetchone(), (None,))  # 예전 행은 NULL(그때는 사유지만 수집)
-        S.save_parcels(con, FakeResolver(), "포천시", "고시공고", [row("2", "국공유")])
-        self.assertEqual(self.kinds(con), {"1": None, "2": "공공"})
+        S.save_parcels(con, FakeResolver(), "포천시", "고시공고", [row("2", "사유")])
+        self.assertEqual(self.kinds(con), {"1": None, "2": "사유"})
 
 
 if __name__ == "__main__":
