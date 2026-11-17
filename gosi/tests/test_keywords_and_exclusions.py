@@ -57,6 +57,16 @@ class CadastralResurveyExclusionTest(unittest.TestCase):
             self.assertTrue(matches_blacklist(t, DEFAULT_BLACKLIST), t)
 
 
+class ReclamationExclusionTest(unittest.TestCase):
+    """제목에 '개간'이 들어간 공고(예: 정비사업(개간))는 추출하지 않는다(사용자 지시 2026-11-17)."""
+
+    def test_title_with_gaegan_is_blocked(self):
+        from core.board_crawler import matches_blacklist
+        for t in ("OO지구 농어촌정비사업(개간) 사업시행계획 공고", "○○ 개간 허가 공고"):
+            self.assertTrue(matches_blacklist(t, DEFAULT_BLACKLIST), t)
+        self.assertFalse(matches_blacklist("OO도로 개설공사 보상계획 공고", DEFAULT_BLACKLIST))
+
+
 class ExcludedBoardsTest(unittest.TestCase):
     def test_excluded_boards_are_not_loaded(self):
         cities = {b["city"] for b in G.load_boards(EXCEL)}
