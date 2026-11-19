@@ -1236,6 +1236,14 @@ class Regions:
             # '평창 병내리'(시·군 약칭 + 리): 합쳐 읽으면 '평창병내리'라는 없는 리가 되고, 게시판 지자체를 붙이면 엉뚱한 곳이 된다
             return {"region": f"{ab.group(1)} {ab.group(2)}", "status": "CHECK",
                     "note": f"시·군 약칭('{ab.group(1)}') + 리: 문서 표기 그대로 사용", "eup": None, "dr": ab.group(2)}
+        # 일반구가 있는 시(안산 상록구·수원 영통구·천안 서북구 등)의 '구' 는 공백을 지우면 동 이름에 붙어 '영통구매탄동'·'록구팔곡일동' 이 된다
+        # (동 정규식이 5글자까지 가져가 앞 글자도 잘린다). 띄어 쓴 구 이름을 먼저 떼어 두었다가 주소에 다시 끼운다(2026-11-19).
+        gu = ""
+        if not self.wide_area and not self.nationwide and self.sigun_name.endswith("시"):
+            mg = re.search(r"(?:^|\s)([가-힣]{1,4}구)(?=\s|$)", clean(raw))
+            if mg and mg.group(1) != self.sigun_name:
+                gu = mg.group(1)
+                raw = re.sub(r"(?:^|(?<=\s))" + re.escape(gu) + r"(?=\s|$)", " ", clean(raw), count=1)
         s = squash(raw)
         s = re.sub(r"[\(\)\[\]<>·,.]+", "", s)
         s = re.sub(r"(일원|일대|외\d*필지|지내|번지)+$", "", s)
@@ -1304,7 +1312,7 @@ class Regions:
             # 사업지가 전국인 기관: 본사 소재지(예: 대구 동구)는 사업지가 아니다. 문서에 적힌 읍면·리·지번만 남겨 PNU 변환(카카오 전국 검색)에 맡긴다
             region = " ".join(x for x in (eup, dr) if x)
         else:
-            region = " ".join(x for x in (self.sido_name, self.sigun_name, eup, dr) if x)
+            region = " ".join(x for x in (self.sido_name, self.sigun_name, gu, eup, dr) if x)
         return {"region": region, "status": status, "note": "; ".join(notes), "eup": eup, "dr": dr}
 
     def _tail_region(self, chunk):
