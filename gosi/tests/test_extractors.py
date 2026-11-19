@@ -363,12 +363,12 @@ class DetectBlocked(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             B.AUTO_FILE = Path(d) / "auto.json"
             try:
-                self.assertFalse(B.is_blocked("전북", "남원시"))
-                B.register_auto("전북", "남원시", "시험")
-                B.register_auto("전북", "남원시", "중복 등록은 한 번만")
-                self.assertEqual(B.all_blocked()["전북"], ["남원시"])
-                self.assertFalse(B.should_run("skip", "전북", "남원시"))
-                self.assertTrue(B.should_run("only", "전북", "남원시"))
+                self.assertFalse(B.is_blocked("제주", "서귀포시"))
+                B.register_auto("제주", "서귀포시", "시험")
+                B.register_auto("제주", "서귀포시", "중복 등록은 한 번만")
+                self.assertEqual(B.all_blocked()["제주"], ["서귀포시"])
+                self.assertFalse(B.should_run("skip", "제주", "서귀포시"))
+                self.assertTrue(B.should_run("only", "제주", "서귀포시"))
                 self.assertIn("충청북도청", B.all_blocked()["충북"])  # 수동 목록은 그대로
             finally:
                 B.AUTO_FILE = old
@@ -380,23 +380,23 @@ class DetectBlocked(unittest.TestCase):
         from core import blocked_sites as B
         err = "ConnectTimeout: HTTPSConnectionPool(host='www.namwon.go.kr', port=443): Max retries"
         recent = __import__("datetime").date.today()
-        rows = [dict(self.board(1, "남원시", "오류(목록)", err, region="전북"), 시각=f"{(recent - __import__('datetime').timedelta(days=d)).isoformat()} 08:45:00") for d in (1, 2)]
+        rows = [dict(self.board(1, "서귀포시", "오류(목록)", err, region="제주"), 시각=f"{(recent - __import__('datetime').timedelta(days=d)).isoformat()} 08:45:00") for d in (1, 2)]
         old_auto, old_rej, old_load, old_pc = B.AUTO_FILE, B.REJECTED_FILE, D.load_tabs, D.pc_can_read
         with tempfile.TemporaryDirectory() as d:
             B.AUTO_FILE, B.REJECTED_FILE = Path(d) / "a.json", Path(d) / "r.json"
-            D.load_tabs = lambda sheet_id=None: ({"전북_게시판상태": rows}, "")
+            D.load_tabs = lambda sheet_id=None: ({"제주_게시판상태": rows}, "")
             D.pc_can_read = lambda *a, **k: (True, True)
             try:
                 self.assertEqual(D.run(apply=True, confirm=None, log=lambda m: None), [])      # 승인 수단이 없으면 등록 안 함
                 self.assertEqual(D.run(apply=True, confirm=lambda q: False, log=lambda m: None), [])  # 거절
-                self.assertFalse(B.is_blocked("전북", "남원시"))
-                self.assertTrue(B.recently_rejected("전북", "남원시"))
+                self.assertFalse(B.is_blocked("제주", "서귀포시"))
+                self.assertTrue(B.recently_rejected("제주", "서귀포시"))
                 asked = []
                 D.run(apply=True, confirm=lambda q: asked.append(q) or True, log=lambda m: None)
                 self.assertEqual(asked, [])  # 거절한 직후 7일은 다시 묻지 않는다
                 B.REJECTED_FILE.write_text("{}", encoding="utf-8")  # 거절 기록을 지우면 다시 묻고, 승인하면 등록
-                self.assertEqual(D.run(apply=True, confirm=lambda q: True, log=lambda m: None), [("전북", "남원시")])
-                self.assertTrue(B.is_blocked("전북", "남원시"))
+                self.assertEqual(D.run(apply=True, confirm=lambda q: True, log=lambda m: None), [("제주", "서귀포시")])
+                self.assertTrue(B.is_blocked("제주", "서귀포시"))
             finally:
                 B.AUTO_FILE, B.REJECTED_FILE, D.load_tabs, D.pc_can_read = old_auto, old_rej, old_load, old_pc
 
