@@ -1240,10 +1240,13 @@ class Regions:
         # (동 정규식이 5글자까지 가져가 앞 글자도 잘린다). 띄어 쓴 구 이름을 먼저 떼어 두었다가 주소에 다시 끼운다(2026-11-19).
         gu = ""
         if not self.wide_area and not self.nationwide and self.sigun_name.endswith("시"):
-            mg = re.search(r"(?:^|\s)([가-힣]{1,4}구)(?=\s|$)", clean(raw))
-            if mg and mg.group(1) != self.sigun_name:
-                gu = mg.group(1)
-                raw = re.sub(r"(?:^|(?<=\s))" + re.escape(gu) + r"(?=\s|$)", " ", clean(raw), count=1)
+            # 구 이름은 5글자까지(마산회원구·마산합포구), 한 소재지에 구가 둘 나오면 동 쪽(마지막)을 쓴다
+            gus = [g for g in re.findall(r"(?:^|(?<=\s))([가-힣]{1,5}구)(?=\s|$)", clean(raw)) if g != self.sigun_name]
+            if gus:
+                gu = gus[-1]
+                raw = clean(raw)
+                for g in set(gus):
+                    raw = re.sub(r"(?:^|(?<=\s))" + re.escape(g) + r"(?=\s|$)", " ", raw)
         s = squash(raw)
         s = re.sub(r"[\(\)\[\]<>·,.]+", "", s)
         s = re.sub(r"(일원|일대|외\d*필지|지내|번지)+$", "", s)

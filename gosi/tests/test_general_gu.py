@@ -25,6 +25,12 @@ class GeneralGuTest(unittest.TestCase):
             r = _regions(mod, city).resolve(raw)
             self.assertEqual(r["region"], want, raw)
 
+    def test_five_char_gu_and_double_gu(self):
+        # 마산회원구·마산합포구(5글자), 소재지에 구가 둘('의창구 마산회원구')이면 동 쪽을 쓴다
+        R = _regions("gyeongnam", "창원시")
+        self.assertEqual(R.resolve("창원시 마산합포구 월영동")["region"], "경상남도 창원시 마산합포구 월영동")
+        self.assertEqual(R.resolve("창원시 의창구 마산회원구 반계동")["region"], "경상남도 창원시 마산회원구 반계동")
+
     def test_city_without_gu_is_unchanged(self):
         r = _regions("gyeonggi", "안산시").resolve("안산시 선감동")
         self.assertEqual(r["region"], "경기도 안산시 선감동")
