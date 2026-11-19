@@ -35,7 +35,7 @@ WINDOW_DAYS = 14
 MIN_FAIL_DAYS = 2
 # 연결 계열 오류(사이트가 응답하지 않거나 끊거나 거부)
 CONN_RE = re.compile(r"Timeout|timed out|ConnectionError|RemoteDisconnected|Max retries|SSLError|Connection aborted|"
-                     r"HTTPError: (?:403|404|429|5\d\d)", re.I)
+                     r"HTTPError: (?:400|403|404|429|5\d\d)", re.I)
 HOST_RE = re.compile(r"host='([^']+)'")
 
 
@@ -53,6 +53,7 @@ def find_candidates(tabs, today=None, window=WINDOW_DAYS, min_days=MIN_FAIL_DAYS
     cutoff = today - dt.timedelta(days=window)
     fail = defaultdict(lambda: {"kinds": set(), "days": set(), "example": "", "hosts": set()})
     ok = set()
+    ok_days = defaultdict(set)
     for tab, rows in tabs.items():
         region, _, sheet = tab.partition("_")
         if region.startswith("PC"):  # 이 PC 의 수집 로그(탭 이름 'PC…')는 Actions 가 막혔는지와 무관하다
@@ -77,6 +78,7 @@ def find_candidates(tabs, today=None, window=WINDOW_DAYS, min_days=MIN_FAIL_DAYS
                     f["hosts"].update(HOST_RE.findall(err))
                 elif status.startswith(("정상", "최근 게시물 없음")):
                     ok.add(key)
+                    ok_days[key].add(day)
             else:  # 문서처리: 첨부 1개 = 1행
                 code = r.get("원인코드", "")
                 if code == "DL_FAIL":
@@ -89,7 +91,11 @@ def find_candidates(tabs, today=None, window=WINDOW_DAYS, min_days=MIN_FAIL_DAYS
                         f["hosts"].update(HOST_RE.findall(err))
                 else:
                     ok.add(key)  # 이 지자체의 문서를 읽은 적이 있다
-    return {k: v for k, v in fail.items() if len(v["days"]) >= min_days and k not in ok}
+                    ok_days[key].add(day)
+    # 창 안에 '정상' 이 하루라도 있으면 빼던 규칙은 거의 매번 실패하는 곳(유성구: 실패 4일·정상 1일)도 놓쳤다.
+    # 실패한 날이 3일 이상이고 성공한 날의 2배 이상이면 후보로 올린다(PC 에서 열리는지 시험하고 승인해야만 등록하므로 느슨해도 안전하다).
+    return {k: v for k, v in fail.items()
+            if len(v["days"]) >= min_days and (k not in ok or (len(v["days"]) >= 3 and len(v["days"]) >= 2 * len(ok_days[k])))}
 
 
 def pc_can_read(region, city, info, log=print):
@@ -143,6 +149,24 @@ def pc_can_read(region, city, info, log=print):
     return any(good for _, good, _ in results), bool(results)
 
 
+BATCH_TABS = 20  # 한 번에 묶어 읽는 탭 수
+
+
+def _batch_get(sh, titles, tries=4):
+    """탭 이름 목록 -> 같은 순서의 값(2차원 목록) 목록. 한도(429)에 걸리면 잠시 쉬었다 다시 한다."""
+    import time
+
+    ranges = ["'" + t.replace("'", "''") + "'" for t in titles]
+    for n in range(tries):
+        try:
+            res = sh.values_batch_get(ranges)
+            return [vr.get("values", []) for vr in res.get("valueRanges", [])]
+        except Exception as e:
+            if n == tries - 1 or "429" not in str(e):
+                raise
+            time.sleep(20 * (n + 1))
+
+
 def load_tabs(sheet_id=None):
     """시트의 '*_게시판상태', '*_문서처리' 탭을 {탭: [행 dict]} 로 읽는다. 못 읽으면 (None, 이유)."""
     try:
@@ -162,12 +186,15 @@ def load_tabs(sheet_id=None):
             return None, "시트 ID 가 없습니다(환경변수 GOOGLE_SHEET_ID 또는 500_local/100. Google_credentials/sheet_id.txt)"
         sh = gc.open_by_key(sid)
         tabs = {}
-        for ws in sh.worksheets():
-            if ws.title.endswith(("_게시판상태", "_문서처리")):
-                values = ws.get_all_values()
+        titles = [ws.title for ws in sh.worksheets() if ws.title.endswith(("_게시판상태", "_문서처리"))]
+        # 탭마다 따로 읽으면 탭이 200개를 넘는 지금은 분당 읽기 한도(60회)에 걸린다(2026-11-19 429). 여러 탭을 한 번에 묶어 읽는다.
+        for i in range(0, len(titles), BATCH_TABS):
+            chunk = titles[i:i + BATCH_TABS]
+            got = _batch_get(sh, chunk)
+            for title, values in zip(chunk, got):
                 if values:
                     head = values[0]
-                    tabs[ws.title] = [dict(zip(head, row)) for row in values[1:]]
+                    tabs[title] = [dict(zip(head, row)) for row in values[1:]]
         return tabs, ""
     except Exception as e:
         return None, f"{type(e).__name__}: {str(e)[:120]}"

@@ -135,13 +135,45 @@ def _iter_pages(data, scale, max_pages):
             pdf.close()
 
 
-def _ocr_png(png, lang):
-    with _OCR_SEM:
-        proc = subprocess.run(
-            [TESSERACT, "stdin", "stdout", "-l", lang, "--psm", "4"],
-            input=png, capture_output=True, timeout=240,
-        )
+OCR_PAGE_TIMEOUT = 240      # 쪽당 테서랙트 제한 시간(초). 넘으면 그림을 줄여 한 번 더 한다
+OCR_RETRY_TIMEOUT = 120
+OCR_RETRY_SHRINK = 0.65     # 재시도 때 그림 가로세로 배율
+OCR_SKIPPED_PAGES = 0       # 끝내 못 읽어 건너뛴 쪽 수(프로세스 누적, 점검용)
+_OCR_ENV = dict(os.environ, OMP_THREAD_LIMIT="1")  # 테서랙트 1개가 코어를 다 쓰려 해 동시 3개가 서로 느려지는 것을 막는다(2026-11 군보 OCR TimeoutExpired 16곳)
+
+
+def _run_tesseract(png, lang, timeout):
+    proc = subprocess.run(
+        [TESSERACT, "stdin", "stdout", "-l", lang, "--psm", "4"],
+        input=png, capture_output=True, timeout=timeout, env=_OCR_ENV,
+    )
     return proc.stdout.decode("utf-8", "replace")
+
+
+def _shrink_png(png, factor):
+    from PIL import Image
+
+    im = Image.open(io.BytesIO(png))
+    im = im.resize((max(1, int(im.width * factor)), max(1, int(im.height * factor))))
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _ocr_png(png, lang):
+    """한 쪽 OCR. 시간이 넘으면 그림을 줄여 한 번 더 하고, 그래도 안 되면 그 쪽만 빈 글로 두어 문서 전체가 실패하지 않게 한다."""
+    global OCR_SKIPPED_PAGES
+    with _OCR_SEM:
+        try:
+            return _run_tesseract(png, lang, OCR_PAGE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            return _run_tesseract(_shrink_png(png, OCR_RETRY_SHRINK), lang, OCR_RETRY_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            OCR_SKIPPED_PAGES += 1
+            print("    [경고] OCR 한 쪽을 시간 안에 못 읽어 건너뜀")
+            return ""
 
 
 # 스캔 PDF OCR 은 쪽당 이미지가 커서 문서 여러 개를 동시에 하면 메모리가 모자라 러너가 죽는다(2026-11-05 충북·충남 exit 137).

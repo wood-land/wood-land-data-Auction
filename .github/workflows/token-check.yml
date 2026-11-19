@@ -1,0 +1,49 @@
+name: token-check
+
+# DB 저장소 접근 토큰(GOSI_DB_TOKEN, DATA_DB_TOKEN)이 만료돼 가는지 매일 확인한다.
+# 2026-11-18 토큰이 만료돼 고시공고·신문·환경영향평가 수집이 이틀간 'Bad credentials' 로 전부 실패했다(수집 단계까지 가지도 못함).
+# 만료 14일 전부터 이 워크플로가 실패로 끝나 GitHub 이 이메일로 알려 준다. 새 토큰을 만들어 시크릿을 갱신하면 다음 날 통과한다.
+#   gh secret set GOSI_DB_TOKEN   /   gh secret set DATA_DB_TOKEN   (wood-land-data-db 저장소 Contents 읽기·쓰기 권한, 만료 1년)
+# 읽기 전용: 저장소·DB 에 아무것도 쓰지 않고, 토큰 값은 출력하지 않는다.
+
+on:
+  schedule:
+    - cron: "10 21 * * *"   # 06:10 KST (수집 워크플로보다 앞)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check DB repo tokens
+        env:
+          GOSI_DB_TOKEN: ${{ secrets.GOSI_DB_TOKEN }}
+          DATA_DB_TOKEN: ${{ secrets.DATA_DB_TOKEN }}
+          WARN_DAYS: "14"
+        run: |
+          fail=0
+          for name in GOSI_DB_TOKEN DATA_DB_TOKEN; do
+            token="${!name}"
+            if [ -z "$token" ]; then echo "::error::$name 시크릿이 비어 있습니다"; fail=1; continue; fi
+            hdr=$(curl -s -D - -o /dev/null -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" \
+                  https://api.github.com/repos/wood-land/wood-land-data-db)
+            code=$(printf '%s' "$hdr" | head -1 | awk '{print $2}')
+            exp=$(printf '%s' "$hdr" | tr -d '\r' | grep -i '^github-authentication-token-expiration:' | sed 's/^[^:]*: *//')
+            if [ "$code" != "200" ]; then
+              echo "::error::$name 으로 wood-land-data-db 에 접근할 수 없습니다(HTTP $code). 만료·취소됐거나 권한이 없습니다. 새 토큰으로 시크릿을 갱신하세요."
+              fail=1; continue
+            fi
+            if [ -z "$exp" ]; then echo "$name: 정상(만료 없음 또는 클래식 토큰)"; continue; fi
+            left=$(( ( $(date -d "$exp" +%s) - $(date +%s) ) / 86400 ))
+            if [ "$left" -le "$WARN_DAYS" ]; then
+              echo "::error::$name 이 ${left}일 뒤($exp) 만료됩니다. 새 토큰을 만들어 시크릿을 갱신하세요."
+              fail=1
+            else
+              echo "$name: 정상, 만료까지 ${left}일"
+            fi
+          done
+          exit $fail

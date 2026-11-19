@@ -318,6 +318,16 @@ class DetectBlocked(unittest.TestCase):
         self.assertEqual(self.find({"경북_게시판상태": tabs["경북_게시판상태"][:2] + tabs["경북_게시판상태"][3:]}).keys(),
                          {("경북", "청송군")})  # '건너뜀' 행은 정상 증거가 아니다
 
+    def test_http_400_every_run_is_a_candidate(self):
+        err = "HTTPError: 400 Client Error: Bad Request for url: https://www.namwon.go.kr/board/post/list.do"
+        tabs = {"전북_게시판상태": [self.board(15, "남원시", "오류(목록)", err), self.board(17, "남원시", "오류(목록)", err)]}
+        self.assertEqual(list(self.find(tabs)), [("전북", "남원시")])
+
+    def test_mostly_failing_city_with_one_good_day_is_still_a_candidate(self):
+        err = "ConnectTimeout: HTTPSConnectionPool(host='www.yuseong.go.kr', port=443): Max retries exceeded"
+        rows = [self.board(d, "유성구", "오류(목록)", err) for d in (14, 16, 18)] + [self.board(15, "유성구", "정상", "")]
+        self.assertEqual(list(self.find({"대전_게시판상태": rows})), [("대전", "유성구")])
+
     def test_single_day_failure_is_not_enough(self):
         err = "ConnectTimeout: x"
         tabs = {"전북_게시판상태": [self.board(17, "군산시", "오류(목록)", err, region="전북"),
